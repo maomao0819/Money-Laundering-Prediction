@@ -9,7 +9,6 @@ import numpy as np
 import time
 import pickle
 import collections
-from argparse import ArgumentParser, Namespace
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.impute import SimpleImputer
@@ -152,8 +151,15 @@ def preprocess(data_dir):
         print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
     return np.array(training_data), labels, np.array(testing_data), testing_alert_key
 
+"""# 訓練資料處理"""
+data_dir = './data'
+# data preprocessing
+training_data_file = 'preprocess_data/training_data.pickle'
+labels_file = 'preprocess_data/labels.pickle'
+testing_data_file = 'preprocess_data/testing_data.pickle'
+testing_alert_key_file = 'preprocess_data/testing_alert_key.pickle'
 
-def generate_data(data_dir, training_data_file, labels_file, testing_data_file, testing_alert_key_file):
+if (os.path.exists(training_data_file) and os.path.exists(labels_file) and os.path.exists(testing_data_file) and os.path.exists(testing_alert_key_file)) != 1:
     training_data, labels, testing_data, testing_alert_key = preprocess(data_dir)
     with open(training_data_file, 'wb') as f:
         pickle.dump(training_data, f)
@@ -163,10 +169,7 @@ def generate_data(data_dir, training_data_file, labels_file, testing_data_file, 
         pickle.dump(testing_data, f)
     with open(testing_alert_key_file, 'wb') as f:
         pickle.dump(testing_alert_key, f)
-    return training_data, labels, testing_data, testing_alert_key
-
-
-def load_data(training_data_file, labels_file, testing_data_file, testing_alert_key_file):
+else:
     with open(training_data_file, 'rb') as f:
         training_data = pickle.load(f)
     with open(labels_file, 'rb') as f:
@@ -175,163 +178,97 @@ def load_data(training_data_file, labels_file, testing_data_file, testing_alert_
         testing_data = pickle.load(f)
     with open(testing_alert_key_file, 'rb') as f:
         testing_alert_key = pickle.load(f)
-    return training_data, labels, testing_data, testing_alert_key
 
+print(training_data[0])
+print(training_data.shape, testing_data.shape)
 
-def get_data(data_dir='./data', preprocess_data_dir='preprocess_data'):
-    training_data_file = os.path.join(preprocess_data_dir, 'training_data.pickle')
-    labels_file = os.path.join(preprocess_data_dir, 'labels.pickle')
-    testing_data_file = os.path.join(preprocess_data_dir, 'testing_data.pickle')
-    testing_alert_key_file = os.path.join(preprocess_data_dir, 'testing_alert_key.pickle')
-    if (os.path.exists(training_data_file) and os.path.exists(labels_file) and os.path.exists(testing_data_file) and os.path.exists(testing_alert_key_file)) != 1:
-        return generate_data(data_dir, training_data_file, labels_file, testing_data_file, testing_alert_key_file)
-    else:
-        return load_data(training_data_file, labels_file, testing_data_file, testing_alert_key_file)
+"""## 缺失值補漏
+  可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
+"""
 
+''' Missing Value Imputation '''
+imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
+imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
+# for numerical index we do imputation using median
+numerical_index = [2,4,5,6,7,8,9,10,11,14,17,24]
+# Otherwise we select the most frequent
+non_numerical_index = [0,1,3,12,13,15,16,18,19,20,21,22,23]
 
-def missing_imputate(training_data, testing_data, numerical_index, non_numerical_index):
-    """## 缺失值補漏
-    可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
-    """
+numerical_data = training_data[:, numerical_index]
+non_numerical_data = training_data[:, non_numerical_index]
 
-    ''' Missing Value Imputation '''
-    imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
-    imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
+imp_median.fit(numerical_data)
+numerical_data = imp_median.transform(numerical_data)
 
+imp_most_frequent.fit(non_numerical_data)
+non_numerical_data = imp_most_frequent.transform(non_numerical_data)
 
-    numerical_data = training_data[:, numerical_index]
-    non_numerical_data = training_data[:, non_numerical_index]
+training_data = np.concatenate((non_numerical_data, numerical_data), axis=1)
 
-    imp_median.fit(numerical_data)
-    numerical_data = imp_median.transform(numerical_data)
+"""  此外，若類別類資料跟數字大小沒關係，我們採用 one-hot encoding 將其編碼。"""
 
-    imp_most_frequent.fit(non_numerical_data)
-    non_numerical_data = imp_most_frequent.transform(non_numerical_data)
+# for some catogorical features, we do one hot encoding
+one_hot_index = [1,3,4,5,6,7,8,9,12]
+onehotencorder = ColumnTransformer(
+    [('one_hot_encoder', OneHotEncoder(handle_unknown='ignore'), one_hot_index)],
+    remainder='passthrough'                     
+)
+onehotencorder.fit(training_data)
+training_data = onehotencorder.transform(training_data)
+print(training_data.shape)
 
-    training_data = np.concatenate((non_numerical_data, numerical_data), axis=1)
+"""# XGBoost 訓練"""
 
-    test_numerical_data = testing_data[:, numerical_index]
-    test_non_numerical_data = testing_data[:, non_numerical_index]
+import xgboost as xgb
+# 建立 XGBClassifier 模型
+xgbrModel=xgb.XGBClassifier(random_state=0)
+# 使用訓練資料訓練模型
+xgbrModel.fit(training_data, labels)
 
-    test_numerical_data = imp_median.transform(test_numerical_data)
+"""# 預測與結果輸出
+  利用訓練好的模型對目標alert key預測報SAR的機率以及輸出為目標格式。
+  目標輸出筆數3850，其中public筆數為1845筆。
+  因上傳格式需要private跟public alert key皆考慮，直接從預測範本統計要預測的alert key，預測結果輸出為prediction.csv。
+"""
 
-    test_non_numerical_data = imp_most_frequent.transform(test_non_numerical_data)
+# Do missing value imputation and one-hot encoding for testing data
+test_numerical_data = testing_data[:, numerical_index]
+test_non_numerical_data = testing_data[:, non_numerical_index]
 
-    testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
+test_numerical_data = imp_median.transform(test_numerical_data)
 
-    return training_data, testing_data
+test_non_numerical_data = imp_most_frequent.transform(test_non_numerical_data)
 
-def onehot_encoding(training_data, testing_data, one_hot_index):
-    onehotencorder = ColumnTransformer(
-        [('one_hot_encoder', OneHotEncoder(handle_unknown='ignore'), one_hot_index)],
-        remainder='passthrough'                     
-    )
-    onehotencorder.fit(training_data)
-    training_data = onehotencorder.transform(training_data)
-    testing_data = onehotencorder.transform(testing_data)
+testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
+testing_data = onehotencorder.transform(testing_data)
 
-    return training_data, testing_data
+# Read csv of all alert keys need to be predicted
+public_private_test_csv = os.path.join(data_dir, '預測的案件名單及提交檔案範例.csv')
+df_public_private_test = pd.read_csv(public_private_test_csv)
 
+# Predict probability
+predicted = []
+for i, _x in enumerate(xgbrModel.predict_proba(testing_data)):
+    predicted.append([testing_alert_key[i], _x[1]])
+predicted = sorted(predicted, reverse=True, key= lambda s: s[1])
 
-def main(args):
-    """# 訓練資料處理"""
-    data_dir = './data'
-    # data preprocessing
-    training_data, labels, testing_data, testing_alert_key = get_data(data_dir=args.data_dir, preprocess_data_dir=args.preprocess_data_dir)
-    print('first training data', training_data[0])
-    print(training_data.shape, testing_data.shape)
+# 考慮private alert key部分，滿足上傳條件
+public_private_alert_key = df_public_private_test['alert_key'].values
+print(len(public_private_alert_key))
 
-    """## 缺失值補漏
-    可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
-    """
+# For alert key not in public, add zeros
+for key in public_private_alert_key:
+    if key not in testing_alert_key:
+        predicted.append([key, 0])
 
-    ''' Missing Value Imputation '''
-    # for numerical index we do imputation using median
-    numerical_index = [2,4,5,6,7,8,9,10,11,14,17,24]
-    # Otherwise we select the most frequent
-    non_numerical_index = [0,1,3,12,13,15,16,18,19,20,21,22,23]
+predict_alert_key, predict_probability = [], []
+for key, prob in predicted:
+    predict_alert_key.append(key)
+    predict_probability.append(prob)
 
-    training_data, testing_data = missing_imputate(training_data, testing_data, numerical_index, non_numerical_index)
+df_predicted = pd.DataFrame({
+    "alert_key": predict_alert_key,
+    "probability": predict_probability
+})
 
-    """  此外，若類別類資料跟數字大小沒關係，我們採用 one-hot encoding 將其編碼。"""
-
-    # for some catogorical features, we do one hot encoding
-    one_hot_index = [1,3,4,5,6,7,8,9,12]
-
-    training_data, testing_data = onehot_encoding(training_data, testing_data, one_hot_index)
-
-    """# XGBoost 訓練"""
-
-    import xgboost as xgb
-    # 建立 XGBClassifier 模型
-    xgbrModel=xgb.XGBClassifier(random_state=0)
-    # 使用訓練資料訓練模型
-    xgbrModel.fit(training_data, labels)
-
-    """# 預測與結果輸出
-    利用訓練好的模型對目標alert key預測報SAR的機率以及輸出為目標格式。
-    目標輸出筆數3850，其中public筆數為1845筆。
-    因上傳格式需要private跟public alert key皆考慮，直接從預測範本統計要預測的alert key，預測結果輸出為prediction.csv。
-    """
-
-    # Read csv of all alert keys need to be predicted
-    public_private_test_csv = os.path.join(data_dir, '預測的案件名單及提交檔案範例.csv')
-    df_public_private_test = pd.read_csv(public_private_test_csv)
-
-    # Predict probability
-    predicted = []
-    for i, _x in enumerate(xgbrModel.predict_proba(testing_data)):
-        predicted.append([testing_alert_key[i], _x[1]])
-    predicted = sorted(predicted, reverse=True, key= lambda s: s[1])
-
-    # 考慮private alert key部分，滿足上傳條件
-    public_private_alert_key = df_public_private_test['alert_key'].values
-    print(len(public_private_alert_key))
-
-    # For alert key not in public, add zeros
-    for key in public_private_alert_key:
-        if key not in testing_alert_key:
-            predicted.append([key, 0])
-
-    predict_alert_key, predict_probability = [], []
-    for key, prob in predicted:
-        predict_alert_key.append(key)
-        predict_probability.append(0.9)
-
-    df_predicted = pd.DataFrame({
-        "alert_key": predict_alert_key,
-        "probability": predict_probability
-    })
-
-    df_predicted.to_csv(args.pred_path, index=False)
-
-
-def parse_args() -> Namespace:
-    parser = ArgumentParser()
-
-    parser.add_argument("--seed", default=100, type=int, help="the seed (default 100)")
-    parser.add_argument("--data_dir", default='./data', type=str, help="the directory to csv files.")
-    parser.add_argument("--pred_path", default='./prediction_baseline_0.csv', type=str, help="the path to path files.")
-    parser.add_argument("--preprocess_data_dir", default='./preprocess_data', type=str, help="the directory to preprocessed pickle files.")
-
-    parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
-
-    # optimizer
-    parser.add_argument("--lr", type=float, default=5e-1)
-    parser.add_argument("--weight_decay", type=float, default=1e-7)
-
-    # data loader
-    parser.add_argument("--train_batch", type=int, default=4)
-    parser.add_argument("--test_batch", type=int, default=1)
-
-    # training
-    parser.add_argument("--n_epoch", type=int, default=500)
-
-    args = parser.parse_args()
-    return args
-
-if __name__ == "__main__":
-    args = parse_args()
-    print()
-    # loadData()
-    main(args)
+df_predicted.to_csv('prediction_baseline.csv', index=False)
