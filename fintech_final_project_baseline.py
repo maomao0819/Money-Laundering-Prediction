@@ -7,6 +7,7 @@ import os
 import pandas as pd
 import numpy as np
 import time
+import pickle
 import collections
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
@@ -149,7 +150,31 @@ def preprocess(data_dir):
 
 data_dir = './data'
 # data preprocessing
-training_data, labels, testing_data, testing_alert_key = preprocess(data_dir)
+training_data_file = 'preprocess_data/training_data.pickle'
+labels_file = 'preprocess_data/labels.pickle'
+testing_data_file = 'preprocess_data/testing_data.pickle'
+testing_alert_key_file = 'preprocess_data/testing_alert_key.pickle'
+
+if (os.path.exists(training_data_file) and os.path.exists(labels_file) and os.path.exists(testing_data_file) and os.path.exists(testing_alert_key_file)) != 1:
+    training_data, labels, testing_data, testing_alert_key = preprocess(data_dir)
+    with open(training_data_file, 'wb') as f:
+        pickle.dump(training_data, f)
+    with open(labels_file, 'wb') as f:
+        pickle.dump(labels, f)
+    with open(testing_data_file, 'wb') as f:
+        pickle.dump(testing_data, f)
+    with open(testing_alert_key_file, 'wb') as f:
+        pickle.dump(testing_alert_key, f)
+else:
+    with open(training_data_file, 'rb') as f:
+        training_data = pickle.load(f)
+    with open(labels_file, 'rb') as f:
+        labels = pickle.load(f)
+    with open(testing_data_file, 'rb') as f:
+        testing_data = pickle.load(f)
+    with open(testing_alert_key_file, 'rb') as f:
+        testing_alert_key = pickle.load(f)
+
 print(training_data[0])
 print(training_data.shape, testing_data.shape)
 
