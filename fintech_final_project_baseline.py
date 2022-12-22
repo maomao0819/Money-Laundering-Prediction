@@ -6,240 +6,218 @@
 import os
 import pandas as pd
 import numpy as np
-import time
-import pickle
-import collections
 from argparse import ArgumentParser, Namespace
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import LabelEncoder
+import utils
+import xgboost as xgb
+from model import Resnet50_Model
+import torch
+from dataset import label_Dataset, alert_key_Dataset
+from torch.utils.data import DataLoader
+from tqdm import tqdm, trange
+import copy
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import chi2
+from sklearn.model_selection import GridSearchCV
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectFromModel
+from sklearn import svm
 
-"""## 資料前處理
-這邊針對訓練資料和測試的資料作整理。
-baseline主要會使用到的csv檔案如下:
-  - public_train_custinfo_full_hashed.csv: 包含主要要判斷的alert key對應的幾項參數，顧客id, 風險等級, 職業, 行內總資產和年齡。
-  - train_x_alert_date: 作為訓練資料的alert key以及發生日期，共23906筆。
-  - public_x_alert_date: 作為公開測試集的alert key，格式同上共1845筆。
-  - train_y_answer: 訓練資料alert key對應最後是否SAR。
-  - 預測的案件名單及提交檔案範例: 用於生成預測結果
+def ML_model_train(Model, training_data, labels):
+    # 使用訓練資料訓練模型
+    Model.fit(training_data, labels)
+    return Model
 
-除此之外，還會使用到顧客資訊當作訓練資料:
-  - public_train_x_ccba_full_hashed.csv
-  - public_train_x_cdtx0001_full_hashed.csv
-  - public_train_x_dp_full_hashed.csv
-  - public_train_x_remit1_full_hashed.csv
+def ML_model_pred(Model, public_testing_data, public_testing_alert_key):
+    predicted = []
+    for i, _x in enumerate(Model.predict_proba(public_testing_data)):
+        predicted.append([public_testing_alert_key[i], _x[1]])
+    predicted = sorted(predicted, reverse=True, key= lambda s: s[0])
+    return predicted
 
-前處理的方式包含:
-  - 從 alert key 檢索出顧客資訊
-  - 對非數值 feature 做 label encoding
-  - 從顧客資訊中挑選適合的 features 當作訓練資料，這裡挑選離 alert date 最近的一筆顧客資訊當作 features
-  - 統計 training data 缺失值數量
-"""
+def seed_everything(args):
+    np.random.seed(args.random_seed)
+    torch.manual_seed(args.random_seed)
+    torch.cuda.manual_seed(args.random_seed)
 
-def preprocess(data_dir):
-    # declare csv path
+# def evaluate_score(dataframe):
+#     dataframe.sort_values(by=['probability'])
+#     sar_id = np.where(dataframe['sar_flag'] == 1)[0]
+#     n_sar = len(sar_id)
+#     score = n_sar / sar_id[-1]
+#     # print(f'score: {n_sar / sar_id[-1]}\t{n_sar} / {sar_id[-1]}')
+#     return score
 
-    # [alert_key, date]
-    train_alert_date_csv = os.path.join(data_dir, 'train_x_alert_date.csv')
-    # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
-    cus_info_csv = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
-    # [alert_key, sar_flag]
-    y_csv = os.path.join(data_dir, 'train_y_answer.csv')
-
-    # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
-    ccba_csv = os.path.join(data_dir, 'public_train_x_ccba_full_hashed.csv')
-    # [cust_id, date, country, cur_type, amt]
-    cdtx_csv = os.path.join(data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
-    # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
-    dp_csv = os.path.join(data_dir, 'public_train_x_dp_full_hashed.csv')
-    # [cust_id, trans_date, trans_no, trade_amount_usd]
-    remit_csv = os.path.join(data_dir, 'public_train_x_remit1_full_hashed.csv')
-    # [alert_key, date]
-    public_x_csv = os.path.join(data_dir, 'public_x_alert_date.csv')
-
-    cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
-    date_col = ['byymm', 'date', 'tx_date', 'trans_date']
-    data_use_col = [[1,3,4,5,6,7,8,9],[2,3,4],[1,4,5,6,7,8,9,10,11],[2,3]]
-    
-    print('Reading csv...')
-    # read csv
-    df_y = pd.read_csv(y_csv)
-    df_cus_info = pd.read_csv(cus_info_csv)
-    df_date = pd.read_csv(train_alert_date_csv)
-    cus_data = [pd.read_csv(_x) for _x in cus_csv]
-    df_public_x = pd.read_csv(public_x_csv)
-
-    # do label encoding
-    le = LabelEncoder()
-    cus_data[2].debit_credit = le.fit_transform(cus_data[2].debit_credit)
-    
-    cnts = [0] * 4
-    labels = []
-    training_data = []
-
-    print('Start processing training data...')
-    start = time.time()
-    for i in range(df_y.shape[0]):
-        # from alert key to get customer information
-        cur_data = df_y.iloc[i]
-        alert_key, label = cur_data['alert_key'], cur_data['sar_flag']
-
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        date = df_date[df_date['alert_key']==alert_key].iloc[0]['date']
-
-
-        cnt = 0
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                cnts[item] += 1
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-        labels.append(label)
-        training_data.append(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_y.shape[0]), end = '')
-    print('Processing time: {:.3f} secs'.format(time.time()-start))
-    print('Missing value of 4 csvs:', cnts)
-
-
-    print('Start processing testing data')
-    testing_data, testing_alert_key = [], []
-    for i in range(df_public_x.shape[0]):
-        # from alert key to get customer information
-        cur_data = df_public_x.iloc[i]
-        alert_key, date = cur_data['alert_key'], cur_data['date']
-
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-
-        testing_data.append(cus_features)
-        testing_alert_key.append(alert_key)
-        # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
-    return np.array(training_data), labels, np.array(testing_data), testing_alert_key
-
-
-def generate_data(data_dir, training_data_file, labels_file, testing_data_file, testing_alert_key_file):
-    training_data, labels, testing_data, testing_alert_key = preprocess(data_dir)
-    with open(training_data_file, 'wb') as f:
-        pickle.dump(training_data, f)
-    with open(labels_file, 'wb') as f:
-        pickle.dump(labels, f)
-    with open(testing_data_file, 'wb') as f:
-        pickle.dump(testing_data, f)
-    with open(testing_alert_key_file, 'wb') as f:
-        pickle.dump(testing_alert_key, f)
-    return training_data, labels, testing_data, testing_alert_key
-
-
-def load_data(training_data_file, labels_file, testing_data_file, testing_alert_key_file):
-    with open(training_data_file, 'rb') as f:
-        training_data = pickle.load(f)
-    with open(labels_file, 'rb') as f:
-        labels = pickle.load(f)
-    with open(testing_data_file, 'rb') as f:
-        testing_data = pickle.load(f)
-    with open(testing_alert_key_file, 'rb') as f:
-        testing_alert_key = pickle.load(f)
-    return training_data, labels, testing_data, testing_alert_key
-
-
-def get_data(data_dir='./data', preprocess_data_dir='preprocess_data'):
-    training_data_file = os.path.join(preprocess_data_dir, 'training_data.pickle')
-    labels_file = os.path.join(preprocess_data_dir, 'labels.pickle')
-    testing_data_file = os.path.join(preprocess_data_dir, 'testing_data.pickle')
-    testing_alert_key_file = os.path.join(preprocess_data_dir, 'testing_alert_key.pickle')
-    if (os.path.exists(training_data_file) and os.path.exists(labels_file) and os.path.exists(testing_data_file) and os.path.exists(testing_alert_key_file)) != 1:
-        return generate_data(data_dir, training_data_file, labels_file, testing_data_file, testing_alert_key_file)
+def run_one_epoch(
+    args,
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim,
+    scheduler: torch.optim.lr_scheduler,
+    mode='train'
+):
+    if mode == 'train':
+        model.train()
     else:
-        return load_data(training_data_file, labels_file, testing_data_file, testing_alert_key_file)
+        model.eval()
+    criterion = torch.nn.CrossEntropyLoss()
 
+    epoch_loss = 0.0
+    epoch_correct = 0.0
+    n_batch = len(dataloader)
+    batch_pbar = tqdm((dataloader), total=n_batch, desc="Batch")
+    with torch.set_grad_enabled(mode == "train"):
+        for batch_idx, data_label in enumerate(batch_pbar, 1):
+            data, label = data_label
+            data = data.to(args.device)
+            label = label.to(args.device)
+            if mode == "train":
+                optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, label)
+            if mode == "train":
+                loss.backward()
+                optimizer.step()
+            batch_loss = loss.item()
+            epoch_loss += batch_loss  # sum up batch loss
+            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+            batch_correct = pred.eq(label.view_as(pred)).sum().item()
+            epoch_correct += batch_correct
+            batch_pbar.set_description(f"Batch [{batch_idx}/{n_batch}]")
+            batch_pbar.set_postfix(loss=f"{batch_loss:.4f}")
 
-def missing_imputate(training_data, testing_data, numerical_index, non_numerical_index):
-    """## 缺失值補漏
-    可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
-    """
+    if mode != "train":
+        scheduler.step()
 
-    ''' Missing Value Imputation '''
-    imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
-    imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
+    performance = {}
+    n_data = len(dataloader.dataset)
+    performance["loss"] = epoch_loss / n_data
+    performance["acc"] = epoch_correct / n_data
+    return performance
 
-
-    numerical_data = training_data[:, numerical_index]
-    non_numerical_data = training_data[:, non_numerical_index]
-
-    imp_median.fit(numerical_data)
-    numerical_data = imp_median.transform(numerical_data)
-
-    imp_most_frequent.fit(non_numerical_data)
-    non_numerical_data = imp_most_frequent.transform(non_numerical_data)
-
-    training_data = np.concatenate((non_numerical_data, numerical_data), axis=1)
-
-    test_numerical_data = testing_data[:, numerical_index]
-    test_non_numerical_data = testing_data[:, non_numerical_index]
-
-    test_numerical_data = imp_median.transform(test_numerical_data)
-
-    test_non_numerical_data = imp_most_frequent.transform(test_non_numerical_data)
-
-    testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
-
-    return training_data, testing_data
-
-def onehot_encoding(training_data, testing_data, one_hot_index):
-    onehotencorder = ColumnTransformer(
-        [('one_hot_encoder', OneHotEncoder(handle_unknown='ignore'), one_hot_index)],
-        remainder='passthrough'                     
+def model_train(args, training_data, labels, testing_data):
+    seed_everything(args)
+    trainset = label_Dataset(training_data, labels)
+    testing_label = pd.read_csv(args.ans_path)['sar_flag']
+    valset = alert_key_Dataset(testing_data, testing_label)
+    # Use the torch dataloader to iterate through the dataset
+    train_loader = DataLoader(
+        trainset, batch_size=args.train_batch, shuffle=True, num_workers=args.workers, pin_memory=True
     )
-    onehotencorder.fit(training_data)
-    training_data = onehotencorder.transform(training_data)
-    testing_data = onehotencorder.transform(testing_data)
+    val_loader = DataLoader(
+        valset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, pin_memory=True
+    )
 
-    return training_data, testing_data
+    model = Resnet50_Model().to(args.device)
+    optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
+    best_loss = np.inf
+    best_acc = -np.inf
+    best_model_weight = copy.deepcopy(model.state_dict())
+    trigger_times = 0
+    epoch_pbar = trange(args.epoch, desc="Epoch")
+    # For each epoch
+    for epoch_idx in epoch_pbar:
+        performance_train = run_one_epoch(args, model, train_loader, optimizer, scheduler, 'train')
+        performance_eval = run_one_epoch(args, model, val_loader, optimizer, scheduler, 'eval')
+
+        if epoch_idx % args.save_interval == 0:
+            utils.save_checkpoint(os.path.join(args.save, f"{epoch_idx+1}.pth"), model)
+            
+        if args.matrix == "loss":
+            if performance_eval["loss"] < best_loss:
+                best_loss = performance_eval["loss"]
+                best_model_weight = copy.deepcopy(model.state_dict())
+                trigger_times = 0
+                utils.save_checkpoint(os.path.join(args.save, "better.pth"), model)
+            else:
+                trigger_times += 1
+                if trigger_times >= args.epoch_patience:
+                    print("Early Stop")
+                    model.load_state_dict(best_model_weight)
+                    break
+        else:
+            if performance_eval > best_acc:
+                best_acc = performance_eval
+                best_model_weight = copy.deepcopy(model.state_dict())
+                trigger_times = 0
+                utils.save_checkpoint(os.path.join(args.save, "better.pth"), model)
+            else:
+                trigger_times += 1
+                if trigger_times >= args.epoch_patience:
+                    print("Early Stop")
+                    model.load_state_dict(best_model_weight)
+                    break
+
+        epoch_pbar.set_description(f"Epoch [{epoch_idx+1}/{args.epoch}]")
+        epoch_pbar.set_postfix(
+            train_loss=performance_train["loss"],
+            train_acc=performance_train["acc"],
+            eval_loss=performance_eval["loss"],
+            eval_acc=performance_eval["acc"],
+        )
+
+    model.load_state_dict(best_model_weight)
+    utils.save_checkpoint(os.path.join(args.save, "best.pth"), model)
+
+def model_pred(
+    args,
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+):
+    model.eval()
+    prediction = []
+    n_batch = len(dataloader)
+    batch_pbar = tqdm((dataloader), total=n_batch, desc="Batch")
+    for batch_idx, data_alert_key in enumerate(batch_pbar, 1):
+        data, alert_key = data_alert_key
+        data = data.to(args.device)
+        alert_key = alert_key.to(args.device)
+        output = model(data)
+        pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+        prediction.extend([pred, alert_key])
+        batch_pbar.set_description(f"Batch [{batch_idx}/{n_batch}]")
+    return prediction
+
+def pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key):
+    # 考慮private alert key部分，滿足上傳條件
+    public_private_alert_key = df_public_private_test['alert_key'].values
+    # print(len(public_private_alert_key))
+
+    # For alert key not in public, add zeros
+    for key in public_private_alert_key:
+        if key not in public_testing_alert_key:
+            predicted.append([key, 0])
+
+    predict_alert_key, predict_probability = [], []
+    for key, prob in predicted:
+        predict_alert_key.append(key)
+        predict_probability.append(prob)
+
+    df_predicted = pd.DataFrame({
+        "alert_key": predict_alert_key,
+        "probability": predict_probability
+    })
+
+    df_predicted.to_csv(args.pred_path, index=False)
+
+def evaluate(args):
+    df_pred = pd.read_csv(args.pred_path)
+    df_ans = pd.read_csv(args.ans_path)
+    df = df_pred.merge(df_ans)
+    sar_id = np.where(df['sar_flag'] == 1)[0]
+    n_sar = len(sar_id)
+    print(f'score: {n_sar / sar_id[-1]}\t{n_sar} / {sar_id[-1]}')
 
 def main(args):
     """# 訓練資料處理"""
     data_dir = './data'
     # data preprocessing
-    training_data, labels, testing_data, testing_alert_key = get_data(data_dir=args.data_dir, preprocess_data_dir=args.preprocess_data_dir)
-    print('first training data', training_data[0])
-    print(training_data.shape, testing_data.shape)
+    training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key = utils.get_data(data_dir=args.data_dir, preprocess_data_dir=args.preprocess_data_dir)
+    # print('first training data', training_data[0])
+    # print(training_data.shape, public_testing_data.shape)
 
     """## 缺失值補漏
     可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
@@ -251,67 +229,109 @@ def main(args):
     # Otherwise we select the most frequent
     non_numerical_index = [0,1,3,12,13,15,16,18,19,20,21,22,23]
 
-    training_data, testing_data = missing_imputate(training_data, testing_data, numerical_index, non_numerical_index)
+
+    training_data, public_testing_data, numerical_index, non_numerical_index, labels = utils.missing_imputate(training_data, public_testing_data, numerical_index, non_numerical_index, labels)
+
+    """ normalization"""
+    # training_data, public_testing_data = utils.normalize(training_data, public_testing_data, numerical_index, non_numerical_index)
 
     """  此外，若類別類資料跟數字大小沒關係，我們採用 one-hot encoding 將其編碼。"""
 
     # for some catogorical features, we do one hot encoding
-    one_hot_index = [1,3,4,5,6,7,8,9,12]
+    # one_hot_index = [1,3,4,5,6,7,8,9,12]
 
-    training_data, testing_data = onehot_encoding(training_data, testing_data, one_hot_index)
+    one_hot_index = non_numerical_index
+    # one_hot_index = [1,5,6,7,10,11]
 
+    training_data, public_testing_data = utils.onehot_encoding(training_data, public_testing_data, one_hot_index)
+
+    
     """# XGBoost 訓練"""
-
-    import xgboost as xgb
     # 建立 XGBClassifier 模型
-    xgbrModel=xgb.XGBClassifier(random_state=0)
-    # 使用訓練資料訓練模型
-    xgbrModel.fit(training_data, labels)
+    xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
+                      n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
+                      max_depth=6,               # 樹的深度
+                      min_child_weight = 1,      # 葉子節點最小權重
+                      gamma=0.,                  # 懲罰項中葉子結點個數前的參數
+                      subsample=0.8,             # 隨機選擇80%樣本建立決策樹
+                    #   objective='multi:softmax', # 指定損失函數
+                      scale_pos_weight=1,        # 解決樣本個數不平衡的問題
+                      random_state=0            # 隨機數
+                      )
+
+    # 定義參數各種組合
+    # n_estimators = [x * 100 for x in range(8, 13)]
+    # learn_rate = [x * 0.1 for x in range(1, 5)]
+    # gamma = [x * 0.1 for x in range(3)]
+    # param_grid = dict(n_estimators=n_estimators, learning_rate=learn_rate, gamma=gamma)
+    # grid = GridSearchCV(estimator=xgbrModel, param_grid=param_grid)
+    # grid.fit(training_data, labels)
+    xgbrModel = ML_model_train(xgbrModel, training_data, labels)
+    # xgbrModel = grid
+
+    """# RandomForestClassifier 訓練"""
+    RFC = RandomForestClassifier(n_estimators = 100)
+    RFC = ML_model_train(RFC, training_data, labels)
+
+    """# KNeighborsClassifier 訓練"""
+    KNN = KNeighborsClassifier(n_neighbors=3)
+    KNN = ML_model_train(KNN, training_data, labels)
+
+    """# DecisionTreeClassifier 訓練"""
+    DT = DecisionTreeClassifier()
+    DT = ML_model_train(DT, training_data, labels)
+    
+    """# SVM 訓練"""
+    SVM = svm.SVC(kernel='poly', degree=3, C=1.0)
+    SVM = ML_model_train(SVM, training_data, labels)
+
+
+    """# Resnet 訓練"""
+    model_train(args, training_data, labels, public_testing_data)
 
     """# 預測與結果輸出
     利用訓練好的模型對目標alert key預測報SAR的機率以及輸出為目標格式。
     目標輸出筆數3850，其中public筆數為1845筆。
     因上傳格式需要private跟public alert key皆考慮，直接從預測範本統計要預測的alert key，預測結果輸出為prediction.csv。
     """
-
+    
     # Read csv of all alert keys need to be predicted
     public_private_test_csv = os.path.join(data_dir, '預測的案件名單及提交檔案範例.csv')
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
     # Predict probability
-    predicted = []
-    for i, _x in enumerate(xgbrModel.predict_proba(testing_data)):
-        predicted.append([testing_alert_key[i], _x[1]])
-    predicted = sorted(predicted, reverse=True, key= lambda s: s[1])
+    predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
+    prob_xgbr = np.array(predicted_xgbr)[:, 1]
 
-    # 考慮private alert key部分，滿足上傳條件
-    public_private_alert_key = df_public_private_test['alert_key'].values
-    print(len(public_private_alert_key))
+    predicted_RFC = ML_model_pred(RFC, public_testing_data, public_testing_alert_key)
+    prob_RFC = np.array(predicted_RFC)[:, 1]
 
-    # For alert key not in public, add zeros
-    for key in public_private_alert_key:
-        if key not in testing_alert_key:
-            predicted.append([key, 0])
+    predicted_KNN = ML_model_pred(KNN, public_testing_data, public_testing_alert_key)
+    prob_KNN = np.array(predicted_KNN)[:, 1]
 
-    predict_alert_key, predict_probability = [], []
-    for key, prob in predicted:
-        predict_alert_key.append(key)
-        predict_probability.append(0.9)
+    predicted_DT = ML_model_pred(DT, public_testing_data, public_testing_alert_key)
+    prob_DT = np.array(predicted_DT)[:, 1]
 
-    df_predicted = pd.DataFrame({
-        "alert_key": predict_alert_key,
-        "probability": predict_probability
-    })
-
-    df_predicted.to_csv(args.pred_path, index=False)
+    predicted_SVM = ML_model_pred(SVM, public_testing_data, public_testing_alert_key)
+    prob_SVM = np.array(predicted_SVM)[:, 1]
+    
+    df_pred = pd.DataFrame(predicted_xgbr, columns = ['alert_key','probability'])
+    df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM
+    df_pred.sort_values(by=['probability'])
+    predicted = df_pred.to_numpy().tolist()
 
 
+    pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key)
+    evaluate(args)
+    
 def parse_args() -> Namespace:
     parser = ArgumentParser()
 
     parser.add_argument("--seed", default=100, type=int, help="the seed (default 100)")
+    parser.add_argument("--save", default='./checkpoints', type=str, help="the directory to csv files.")
     parser.add_argument("--data_dir", default='./data', type=str, help="the directory to csv files.")
-    parser.add_argument("--pred_path", default='./prediction_baseline_0.csv', type=str, help="the path to path files.")
+    parser.add_argument("--pred_path", default='./prediction_baseline_0.csv', type=str, help="the path to pred file.")
+    parser.add_argument("--ans_path", default='./data/24_ESun_public_y_answer.csv', type=str, help="the path to ans file.")
     parser.add_argument("--preprocess_data_dir", default='./preprocess_data', type=str, help="the directory to preprocessed pickle files.")
 
     parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
@@ -325,8 +345,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--test_batch", type=int, default=1)
 
     # training
-    parser.add_argument("--n_epoch", type=int, default=500)
-
+    parser.add_argument("--epoch", type=int, default=500)
+    parser.add_argument("--save_interval", type=int, default=5)
+    parser.add_argument("--epoch_patience", type=int, default=5)
     args = parser.parse_args()
     return args
 
