@@ -350,3 +350,10 @@ def save_checkpoint(checkpoint_path, model):
     state = model.state_dict()
     torch.save(state, checkpoint_path)
     print('model saved to %s' % checkpoint_path)
+
+def load_checkpoint(checkpoint_path, model):
+    state = torch.load(checkpoint_path)
+    model.load_state_dict(state)
+    # model.load_state_dict(torch.load(checkpoint_path, map_location=device), strict=False)
+    print('model loaded from %s' % checkpoint_path)
+    return model
