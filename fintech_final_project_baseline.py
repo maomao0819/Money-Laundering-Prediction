@@ -9,12 +9,13 @@ import numpy as np
 from argparse import ArgumentParser, Namespace
 import utils
 import xgboost as xgb
-from model import Resnet50_Model
+from model import DNN_Model, DNN_Model_Prob
 import torch
 from dataset import label_Dataset, alert_key_Dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
 import copy
+import torchvision
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_selection import chi2
 from sklearn.model_selection import GridSearchCV
@@ -37,9 +38,9 @@ def ML_model_pred(Model, public_testing_data, public_testing_alert_key):
     return predicted
 
 def seed_everything(args):
-    np.random.seed(args.random_seed)
-    torch.manual_seed(args.random_seed)
-    torch.cuda.manual_seed(args.random_seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
 
 # def evaluate_score(dataframe):
 #     dataframe.sort_values(by=['probability'])
@@ -61,8 +62,6 @@ def run_one_epoch(
         model.train()
     else:
         model.eval()
-    criterion = torch.nn.CrossEntropyLoss()
-
     epoch_loss = 0.0
     epoch_correct = 0.0
     n_batch = len(dataloader)
@@ -70,18 +69,18 @@ def run_one_epoch(
     with torch.set_grad_enabled(mode == "train"):
         for batch_idx, data_label in enumerate(batch_pbar, 1):
             data, label = data_label
-            data = data.to(args.device)
-            label = label.to(args.device)
+            data = data.type(torch.FloatTensor).to(args.device)
+            label = label.type(torch.FloatTensor).to(args.device)
             if mode == "train":
                 optimizer.zero_grad()
             output = model(data)
-            loss = criterion(output, label)
+            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.1, reduction='mean')
             if mode == "train":
                 loss.backward()
                 optimizer.step()
             batch_loss = loss.item()
             epoch_loss += batch_loss  # sum up batch loss
-            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+            pred = torch.round(output).squeeze(-1)
             batch_correct = pred.eq(label.view_as(pred)).sum().item()
             epoch_correct += batch_correct
             batch_pbar.set_description(f"Batch [{batch_idx}/{n_batch}]")
@@ -98,9 +97,13 @@ def run_one_epoch(
 
 def model_train(args, training_data, labels, testing_data):
     seed_everything(args)
+    # print(type(training_data))
+    # print(np.shape(training_data))
+    # print((training_data))
+
     trainset = label_Dataset(training_data, labels)
     testing_label = pd.read_csv(args.ans_path)['sar_flag']
-    valset = alert_key_Dataset(testing_data, testing_label)
+    valset = label_Dataset(testing_data, testing_label)
     # Use the torch dataloader to iterate through the dataset
     train_loader = DataLoader(
         trainset, batch_size=args.train_batch, shuffle=True, num_workers=args.workers, pin_memory=True
@@ -109,7 +112,7 @@ def model_train(args, training_data, labels, testing_data):
         valset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, pin_memory=True
     )
 
-    model = Resnet50_Model().to(args.device)
+    model = DNN_Model().to(args.device)
     optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
@@ -158,27 +161,36 @@ def model_train(args, training_data, labels, testing_data):
             eval_loss=performance_eval["loss"],
             eval_acc=performance_eval["acc"],
         )
-
     model.load_state_dict(best_model_weight)
     utils.save_checkpoint(os.path.join(args.save, "best.pth"), model)
+    return model
 
 def model_pred(
     args,
     model: torch.nn.Module,
-    dataloader: DataLoader,
+    testing_data,
+    testing_alert_key
 ):
+    testset = alert_key_Dataset(testing_data, testing_alert_key)
+    # Use the torch dataloader to iterate through the dataset
+    test_loader = DataLoader(
+        testset, batch_size=args.train_batch, shuffle=True, num_workers=args.workers, pin_memory=True
+    )
+
     model.eval()
     prediction = []
-    n_batch = len(dataloader)
-    batch_pbar = tqdm((dataloader), total=n_batch, desc="Batch")
+    n_batch = len(test_loader)
+    batch_pbar = tqdm((test_loader), total=n_batch, desc="Batch")
     for batch_idx, data_alert_key in enumerate(batch_pbar, 1):
         data, alert_key = data_alert_key
-        data = data.to(args.device)
-        alert_key = alert_key.to(args.device)
+        data = data.type(torch.FloatTensor).to(args.device)
         output = model(data)
-        pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-        prediction.extend([pred, alert_key])
+        prob = output.squeeze(-1).detach().cpu().numpy()
+        alert_key = alert_key.squeeze(-1).detach().cpu().numpy()
+        key_prob = np.dstack((alert_key, prob)).squeeze(0)
+        prediction.extend(key_prob)
         batch_pbar.set_description(f"Batch [{batch_idx}/{n_batch}]")
+    prediction = sorted(prediction, reverse=True, key= lambda s: s[0])
     return prediction
 
 def pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key):
@@ -190,7 +202,7 @@ def pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_ke
     for key in public_private_alert_key:
         if key not in public_testing_alert_key:
             predicted.append([key, 0])
-
+    print(len(predicted))
     predict_alert_key, predict_probability = [], []
     for key, prob in predicted:
         predict_alert_key.append(key)
@@ -244,10 +256,11 @@ def main(args):
     # one_hot_index = [1,5,6,7,10,11]
 
     training_data, public_testing_data = utils.onehot_encoding(training_data, public_testing_data, one_hot_index)
+    training_data = training_data.toarray()
+    public_testing_data = public_testing_data.toarray()
 
-    
-    """# XGBoost 訓練"""
-    # 建立 XGBClassifier 模型
+    # """# XGBoost 訓練"""
+    # # 建立 XGBClassifier 模型
     xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
                       n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
                       max_depth=6,               # 樹的深度
@@ -259,7 +272,7 @@ def main(args):
                       random_state=0            # 隨機數
                       )
 
-    # 定義參數各種組合
+    # # 定義參數各種組合
     # n_estimators = [x * 100 for x in range(8, 13)]
     # learn_rate = [x * 0.1 for x in range(1, 5)]
     # gamma = [x * 0.1 for x in range(3)]
@@ -282,12 +295,12 @@ def main(args):
     DT = ML_model_train(DT, training_data, labels)
     
     """# SVM 訓練"""
-    SVM = svm.SVC(kernel='poly', degree=3, C=1.0)
+    SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
     SVM = ML_model_train(SVM, training_data, labels)
 
 
     """# Resnet 訓練"""
-    model_train(args, training_data, labels, public_testing_data)
+    dnn = model_train(args, training_data, labels, public_testing_data)
 
     """# 預測與結果輸出
     利用訓練好的模型對目標alert key預測報SAR的機率以及輸出為目標格式。
@@ -314,12 +327,16 @@ def main(args):
 
     predicted_SVM = ML_model_pred(SVM, public_testing_data, public_testing_alert_key)
     prob_SVM = np.array(predicted_SVM)[:, 1]
+
+    dnn_prob = DNN_Model_Prob().to(args.device)
+    dnn_prob.load_state_dict(dnn.state_dict())
+    predicted_DNN = model_pred(args, dnn_prob, public_testing_data, public_testing_alert_key)
+    prob_DNN = np.array(predicted_DNN)[:, 1]
     
     df_pred = pd.DataFrame(predicted_xgbr, columns = ['alert_key','probability'])
-    df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM
+    df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN
     df_pred.sort_values(by=['probability'])
     predicted = df_pred.to_numpy().tolist()
-
 
     pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key)
     evaluate(args)
@@ -333,21 +350,23 @@ def parse_args() -> Namespace:
     parser.add_argument("--pred_path", default='./prediction_baseline_0.csv', type=str, help="the path to pred file.")
     parser.add_argument("--ans_path", default='./data/24_ESun_public_y_answer.csv', type=str, help="the path to ans file.")
     parser.add_argument("--preprocess_data_dir", default='./preprocess_data', type=str, help="the directory to preprocessed pickle files.")
-
+    parser.add_argument("--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cuda")
     parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
 
     # optimizer
-    parser.add_argument("--lr", type=float, default=5e-1)
+    parser.add_argument("-lr", "--learning_rate", type=float, default=5e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-7)
 
     # data loader
-    parser.add_argument("--train_batch", type=int, default=4)
-    parser.add_argument("--test_batch", type=int, default=1)
+    parser.add_argument("--train_batch", type=int, default=128)
+    parser.add_argument("--test_batch", type=int, default=128)
 
     # training
-    parser.add_argument("--epoch", type=int, default=500)
+    parser.add_argument("--epoch", type=int, default=1000)
     parser.add_argument("--save_interval", type=int, default=5)
-    parser.add_argument("--epoch_patience", type=int, default=5)
+    parser.add_argument("--epoch_patience", type=int, default=50)
+
+    parser.add_argument("--matrix", type=str, default='loss')
     args = parser.parse_args()
     return args
 

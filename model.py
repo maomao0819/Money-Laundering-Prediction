@@ -1,18 +1,41 @@
 import torch
 import torch.nn as nn
-from torchvision import models
 
-class Resnet50_Model(nn.Module):
-    def __init__(self, n_classes=2, fix_backbone=False):
-      super(Resnet50_Model, self).__init__()
-      self.backbone = models.resnet50(pretrained=False)
-      if fix_backbone:
-        for child in self.backbone.children():
-          for param in child.parameters():
-            param.requires_grad = False
-      self.classifier = nn.Linear(1000, n_classes)
+class DNN_Model(nn.Module):
+    def __init__(self):
+        super(DNN_Model, self).__init__()
+        self.fc_reconstruct = nn.Sequential(
+            nn.Linear(69, 128),
+            nn.Mish(True),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.ReLU(True),
+            nn.Linear(64, 32),
+            nn.ReLU(True),
+            nn.Dropout(0.2),
+            nn.Linear(32, 69),
+            nn.Mish(True),
+            nn.Dropout(0.2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(69, 16),
+            nn.Mish(True),
+            nn.Dropout(0.2),
+            nn.Linear(16, 1),
+        )
 
     def forward(self, input):
-      feature = self.backbone(input)
-      output = self.classifier(feature)
-      return output
+        feature = self.fc_reconstruct(input)
+        output = self.classifier(feature)
+        return output
+
+class DNN_Model_Prob(DNN_Model):
+    def __init__(self):
+        super().__init__()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, input):
+        feature = self.fc_reconstruct(input)
+        output = self.classifier(feature)
+        prob = self.sigmoid(output)
+        return prob
