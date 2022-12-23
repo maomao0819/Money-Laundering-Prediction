@@ -120,6 +120,7 @@ def model_train(args, training_data, labels, testing_data, load=True):
     model = DNN_Model().to(args.device)
     if os.path.exists(args.load) and load:
         model = utils.load_checkpoint(args.load, model)
+
     optimizer = torch.optim.AdamW(model.classifier.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
@@ -286,24 +287,24 @@ def main(args):
     # param_grid = dict(n_estimators=n_estimators, learning_rate=learn_rate, gamma=gamma)
     # grid = GridSearchCV(estimator=xgbrModel, param_grid=param_grid)
     # grid.fit(training_data, labels)
-    # xgbrModel = ML_model_train(xgbrModel, training_data, labels)
-    # # xgbrModel = grid
+    xgbrModel = ML_model_train(xgbrModel, training_data, labels)
+    # xgbrModel = grid
 
-    # """# RandomForestClassifier 訓練"""
-    # RFC = RandomForestClassifier(n_estimators = 100)
-    # RFC = ML_model_train(RFC, training_data, labels)
+    """# RandomForestClassifier 訓練"""
+    RFC = RandomForestClassifier(n_estimators = 100)
+    RFC = ML_model_train(RFC, training_data, labels)
 
-    # """# KNeighborsClassifier 訓練"""
-    # KNN = KNeighborsClassifier(n_neighbors=3)
-    # KNN = ML_model_train(KNN, training_data, labels)
+    """# KNeighborsClassifier 訓練"""
+    KNN = KNeighborsClassifier(n_neighbors=3)
+    KNN = ML_model_train(KNN, training_data, labels)
 
-    # """# DecisionTreeClassifier 訓練"""
-    # DT = DecisionTreeClassifier()
-    # DT = ML_model_train(DT, training_data, labels)
+    """# DecisionTreeClassifier 訓練"""
+    DT = DecisionTreeClassifier()
+    DT = ML_model_train(DT, training_data, labels)
     
-    # """# SVM 訓練"""
-    # SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
-    # SVM = ML_model_train(SVM, training_data, labels)
+    """# SVM 訓練"""
+    SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
+    SVM = ML_model_train(SVM, training_data, labels)
 
 
     """# Resnet 訓練"""
@@ -320,16 +321,16 @@ def main(args):
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
     # # Predict probability
-    # predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
-    # prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
+    predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
+    prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
-    # prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
+    prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
-    # prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
+    prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
 
-    # prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
+    prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
 
-    # prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
+    prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
 
     dnn_prob = DNN_Model_Prob().to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
@@ -337,8 +338,8 @@ def main(args):
     prob_DNN = np.array(predicted_DNN)[:, 1]
     
     df_pred = pd.DataFrame(predicted_DNN, columns = ['alert_key','probability'])
-    # df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN
-    df_pred['probability'] = prob_DNN
+    df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN
+    # df_pred['probability'] = prob_DNN
     df_pred.sort_values(by=['probability'])
     predicted = df_pred.to_numpy().tolist()
 
