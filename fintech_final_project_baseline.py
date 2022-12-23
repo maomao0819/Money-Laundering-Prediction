@@ -79,7 +79,7 @@ def run_one_epoch(
             if mode == "train":
                 optimizer.zero_grad()
             output = model(data)
-            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.1, reduction='mean')
+            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.05, reduction='mean')
             if mode == "train":
                 loss.backward()
                 optimizer.step()
@@ -308,7 +308,7 @@ def main(args):
 
 
     """# Resnet 訓練"""
-    dnn = model_train(args, training_data, labels, public_testing_data)
+    dnn = model_train(args, training_data, labels, public_testing_data, load=False)
 
     """# 預測與結果輸出
     利用訓練好的模型對目標alert key預測報SAR的機率以及輸出為目標格式。
@@ -338,7 +338,7 @@ def main(args):
     prob_DNN = np.array(predicted_DNN)[:, 1]
     
     df_pred = pd.DataFrame(predicted_DNN, columns = ['alert_key','probability'])
-    df_pred['probability'] = prob_xgbr + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN
+    df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
     # df_pred['probability'] = prob_DNN
     df_pred.sort_values(by=['probability'])
     predicted = df_pred.to_numpy().tolist()
@@ -368,9 +368,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--test_batch", type=int, default=128)
 
     # training
-    parser.add_argument("--epoch", type=int, default=1000)
+    parser.add_argument("--epoch", type=int, default=10000)
     parser.add_argument("--save_interval", type=int, default=5)
-    parser.add_argument("--epoch_patience", type=int, default=50)
+    parser.add_argument("--epoch_patience", type=int, default=100)
 
     parser.add_argument("--matrix", type=str, default='loss')
     args = parser.parse_args()
