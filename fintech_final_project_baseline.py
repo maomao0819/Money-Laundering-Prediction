@@ -37,6 +37,11 @@ def ML_model_pred(Model, public_testing_data, public_testing_alert_key):
     predicted = sorted(predicted, reverse=True, key= lambda s: s[0])
     return predicted
 
+def ML_model_prob(Model, public_testing_data, public_testing_alert_key):
+    predicted = ML_model_pred(Model, public_testing_data, public_testing_alert_key)
+    prob = np.array(predicted)[:, 1]
+    return prob
+
 def seed_everything(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -313,20 +318,15 @@ def main(args):
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
     # Predict probability
-    predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
-    prob_xgbr = np.array(predicted_xgbr)[:, 1]
+    prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
-    predicted_RFC = ML_model_pred(RFC, public_testing_data, public_testing_alert_key)
-    prob_RFC = np.array(predicted_RFC)[:, 1]
+    prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
-    predicted_KNN = ML_model_pred(KNN, public_testing_data, public_testing_alert_key)
-    prob_KNN = np.array(predicted_KNN)[:, 1]
+    prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
 
-    predicted_DT = ML_model_pred(DT, public_testing_data, public_testing_alert_key)
-    prob_DT = np.array(predicted_DT)[:, 1]
+    prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
 
-    predicted_SVM = ML_model_pred(SVM, public_testing_data, public_testing_alert_key)
-    prob_SVM = np.array(predicted_SVM)[:, 1]
+    prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
 
     dnn_prob = DNN_Model_Prob().to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
