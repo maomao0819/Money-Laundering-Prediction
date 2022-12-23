@@ -318,6 +318,7 @@ def main(args):
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
     # Predict probability
+    predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
     prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
     prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
