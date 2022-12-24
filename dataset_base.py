@@ -1,14 +1,11 @@
 from torch.utils.data import Dataset
-import numpy as np
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import OneHotEncoder
-import pandas as pd
+
 class label_Dataset(Dataset):
-    def __init__(self, df):
+    def __init__(self, data, labels):
         """ Intialize the image dataset """
-        self.labels = list(df['label'])
-        self.data = df.drop(columns=['label', 'alert_key']).to_numpy().astype(np.float32)
-        
+        self.data = data
+        self.labels = labels
+           
     def __getitem__(self, index):
         """ Get a sample from the dataset """
         data = self.data[index]
@@ -20,11 +17,11 @@ class label_Dataset(Dataset):
         return len(self.labels)
 
 class alert_key_Dataset(Dataset):
-    def __init__(self, df):
+    def __init__(self, data, alert_key):
         """ Intialize the image dataset """
-        self.alert_key = list(df['alert_key'])
-        self.data = df.drop(columns=['label', 'alert_key']).to_numpy().astype(np.float32)
-        
+        self.data = data
+        self.alert_key = alert_key
+           
     def __getitem__(self, index):
         """ Get a sample from the dataset """
         data = self.data[index]

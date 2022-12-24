@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 
 class DNN_Model(nn.Module):
-    def __init__(self):
+    def __init__(self, n_feature=26):
         super(DNN_Model, self).__init__()
         self.fc_reconstruct = nn.Sequential(
-            nn.Linear(69, 128),
+            nn.Linear(n_feature, 128),
             nn.Mish(True),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
@@ -13,12 +13,12 @@ class DNN_Model(nn.Module):
             nn.Linear(64, 32),
             nn.ReLU(True),
             nn.Dropout(0.2),
-            nn.Linear(32, 69),
+            nn.Linear(32, n_feature),
             nn.Mish(True),
             nn.Dropout(0.2),
         )
         self.classifier = nn.Sequential(
-            nn.Linear(69, 16),
+            nn.Linear(n_feature, 16),
             nn.Mish(True),
             nn.Dropout(0.2),
             nn.Linear(16, 1),
@@ -30,8 +30,8 @@ class DNN_Model(nn.Module):
         return output
 
 class DNN_Model_Prob(DNN_Model):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, n_feature=26):
+        super().__init__(n_feature=n_feature)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input):

@@ -1,16 +1,13 @@
-# !pip install xgboost==1.7.1
-
-# import library
 import os
-import pandas as pd
+import copy
 import numpy as np
-import time
-import pickle
+import pandas as pd
+from tqdm import tqdm
 import torch
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer, make_column_transformer
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, LabelBinarizer, OneHotEncoder
+import pickle
 
 """## 資料前處理
 這邊針對訓練資料和測試的資料作整理。
@@ -34,6 +31,265 @@ baseline主要會使用到的csv檔案如下:
   - 統計 training data 缺失值數量
 """
 
+def load_cus_df(args):
+    # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
+    ccba_csv = os.path.join(args.data_dir, 'public_train_x_ccba_full_hashed.csv')
+    # [cust_id, date, country, cur_type, amt]
+    cdtx_csv = os.path.join(args.data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
+    # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
+    dp_csv = os.path.join(args.data_dir, 'public_train_x_dp_full_hashed.csv')
+    # [cust_id, trans_date, trans_no, trade_amount_usd]
+    remit_csv = os.path.join(args.data_dir, 'public_train_x_remit1_full_hashed.csv')
+    cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
+    cus_data = [pd.read_csv(_x) for _x in cus_csv]
+    cus_data[1].rename(columns = {'date': 'c_date'}, inplace = True)
+    return cus_data
+
+def concat_cus_data(args, df_data, cus_data):
+    date_col = ['byymm', 'c_date', 'tx_date', 'trans_date']
+    df_data = df_data.assign(label=0)
+    df_data_ids = list(range(len(df_data)))
+    df_data_batch_ids = [df_data_ids[i:i+args.df_batch_size] for i in range(0, len(df_data), args.df_batch_size)]
+    df = pd.DataFrame()
+    n_batch = len(df_data_batch_ids)
+    batch_pbar = tqdm((df_data_batch_ids), total=n_batch, desc="Data Batch")
+
+    for df_data_batch_id in batch_pbar:
+        df_data_batch = df_data.iloc[df_data_batch_id]
+        total_alert_keys = df_data_batch['alert_key'].unique()
+        for df_cus_id, df_cus in enumerate(cus_data):
+            df_data_batch = df_data_batch.merge(df_cus, on=['cust_id'])
+            df_data_batch['day_diff'] = (df_data_batch[date_col[df_cus_id]] - df_data_batch['date']).abs()
+            df_data_batch_closest = df_data_batch.loc[df_data_batch.groupby('alert_key')['day_diff'].idxmin()]
+            df_data_batch_closest = df_data_batch_closest.drop(columns=['day_diff'])
+            df_data_batch = df_data_batch.drop(columns=['day_diff'])
+            # remove date > date + args.n_day_range
+            df_data_batch = df_data_batch[(df_data_batch['date'] + args.n_day_range >= df_data_batch[date_col[df_cus_id]])]
+            # remove date < date + args.n_day_range
+            df_data_batch = df_data_batch[(df_data_batch['date'] - args.n_day_range <= df_data_batch[date_col[df_cus_id]])]
+            df_data_batch = pd.concat([df_data_batch, df_data_batch_closest])
+            # imputate nan alert keys
+            imputate_alert_keys = list(set(total_alert_keys) - set(df_data_batch['alert_key'].unique()))
+            imputate_index = pd.RangeIndex(len(imputate_alert_keys))
+            df_imputate = pd.DataFrame(np.nan, index=imputate_index, columns=df_data_batch.columns)
+            df_imputate['alert_key'] = imputate_alert_keys
+            df_data_batch = pd.concat([df_data_batch, df_imputate])
+            # label
+            df_data_batch['label'] += ((df_data_batch[date_col[df_cus_id]] - df_data_batch['date']).abs() / args.n_day_range).clip(0, 1)
+            df_data_batch = df_data_batch.drop(columns=[date_col[df_cus_id]])
+            if df_cus_id == 2:
+                df_data_batch['tx_amt'] = df_data_batch['tx_amt'] * df_data_batch['exchg_rate']
+                df_data_batch = df_data_batch.drop(columns=['exchg_rate'])
+            # reset 
+            df_data_batch = df_data_batch.drop_duplicates()
+            df_data_batch = df_data_batch.reset_index(drop=True)
+        df = pd.concat([df, df_data_batch])
+        batch_pbar.set_postfix(shape=df.shape)
+    if 'sar_flag' in df.columns:
+        df['label'] = (df['sar_flag'] * (1 - df['label'] / len(cus_data) / 2)).clip(0, 1)
+    # reset
+    df['alert_key'] = df['alert_key'].astype(int)
+    df = df.drop_duplicates()
+    df = df.reset_index(drop=True)
+    return df
+
+def generate_train_data(args):
+
+    # [alert_key, date]
+    train_alert_date_csv = os.path.join(args.data_dir, 'train_x_alert_date.csv')
+
+    # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
+    cus_info_csv = os.path.join(args.data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    # [alert_key, sar_flag]
+    y_csv = os.path.join(args.data_dir, 'train_y_answer.csv')
+
+    df_y = pd.read_csv(y_csv)
+    df_cus_info = pd.read_csv(cus_info_csv)
+    df_date = pd.read_csv(train_alert_date_csv)
+    cus_data = load_cus_df(args)
+
+    df_data = df_y.merge(df_cus_info)
+    df_data = df_data.merge(df_date)
+    
+    df_data = concat_cus_data(args, df_data, cus_data)
+
+    write_to_pickle(args.train_pickle, df_data)
+    return df_data
+
+def generate_public_data(args):
+
+    # [alert_key, date]
+    public_alert_date_csv = os.path.join(args.data_dir, 'public_x_alert_date.csv')
+    # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
+    cus_info_csv = os.path.join(args.data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    # [alert_key, sar_flag]
+    y_csv = os.path.join(args.data_dir, '24_ESun_public_y_answer.csv')
+
+    df_y = pd.read_csv(y_csv)
+    df_cus_info = pd.read_csv(cus_info_csv)
+    df_date = pd.read_csv(public_alert_date_csv)
+    cus_data = load_cus_df(args)
+
+    df_data = df_y.merge(df_cus_info)
+    df_data = df_data.merge(df_date)
+
+    df_data = concat_cus_data(args, df_data, cus_data)
+    write_to_pickle(args.public_pickle, df_data)
+    return df_data
+
+def get_train_data(args):
+    if os.path.exists(args.train_pickle):
+        df_train = load_from_pickle(args.train_pickle)
+    else:
+        df_train = generate_train_data(args)
+    return df_train
+
+def get_public_data(args):
+    if os.path.exists(args.public_pickle):
+        df_public = load_from_pickle(args.public_pickle)
+    else:
+        df_public = generate_public_data(args)
+    return df_public
+
+def get_column_type(df_data):
+    categorical_column = ['byymm', 'date', 'country', 'cur_type', 'risk_rank', 'occupation_code', 'AGE', 'debit_credit', 'tx_date', 'tx_time', 'tx_type', 'info_asset_code', 'fiscTxId', 'txbranch', 'cross_bank', 'ATM', 'trans_date', 'trans_no', 'sar_flag']
+    no_process_column = ['alert_key', 'sar_flag', 'cust_id', 'label']
+    all_column = set(df_data.columns.tolist())
+    categorical_column = set(categorical_column)
+    no_process_column = set(no_process_column)
+    numerical_column = all_column - categorical_column - no_process_column
+    categorical_column = all_column - numerical_column - no_process_column
+    numerical_column = list(numerical_column)
+    categorical_column = list(categorical_column)
+    return numerical_column, categorical_column
+
+def missing_remove(df_train, df_test, remove_threshold_ratio=0.6):
+    keep_columns = df_train.notnull().sum(axis = 0) > len(df_train) * remove_threshold_ratio
+    df_train = df_train[df_train.columns[keep_columns]]
+    keep_rows = df_train.notnull().sum(axis = 1) > len(df_train.columns) * remove_threshold_ratio
+    df_train = df_train[keep_rows]
+    df_train = df_train.drop_duplicates()
+    df_train = df_train.reset_index(drop=True)
+    df_test = df_test[df_train.columns]
+    return df_train, df_test
+
+def missing_imputate(df_train, df_test):
+    """## 缺失值補漏
+    可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
+    """
+
+    ''' Missing Value Imputation '''
+    imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
+    imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
+    numerical_columns, categorical_columns = get_column_type(df_train)
+    for numerical_column in numerical_columns:
+        df_train[[numerical_column]] = imp_median.fit_transform(df_train[[numerical_column]])
+        df_test[[numerical_column]] = pd.DataFrame(imp_median.transform(df_test[[numerical_column]].copy()))
+    categorical_columns.append('label')
+    categorical_columns.append('sar_flag')
+    for categorical_column in categorical_columns:
+        df_train[[categorical_column]] = imp_most_frequent.fit_transform(df_train[[categorical_column]])
+        df_test[[categorical_column]] = pd.DataFrame(imp_most_frequent.transform(df_test[[categorical_column]].copy()))
+    return df_train, df_test
+
+def missing_process(df_train, df_test, remove_threshold_ratio=0.5):
+    print('missing processing')
+    df_train, df_test = missing_remove(df_train, df_test, remove_threshold_ratio=remove_threshold_ratio)
+    df_train, df_test = missing_imputate(df_train, df_test)
+    
+    return df_train, df_test
+
+def normalize(df_train, df_public, numerical_columns):
+    print('normalizing')
+    minmax = MinMaxScaler()
+    df_train_numerical = df_train[numerical_columns].copy()
+    normalized_column = df_train_numerical.mean(axis=0) > 100
+    df_public_numerical = df_public[numerical_columns].copy()
+    normalized_column = df_public_numerical.mean(axis=0) > 100
+    for numerical_column in numerical_columns:
+        df_train_numerical[[numerical_column]] = pd.DataFrame(minmax.fit_transform(df_train_numerical[[numerical_column]].copy()))
+        df_public_numerical[[numerical_column]] = pd.DataFrame(minmax.transform(df_public_numerical[[numerical_column]].copy()))
+    return df_train_numerical, df_public_numerical
+
+def label_encoding(df_train, df_public, categorical_columns):
+    print('label encoding')
+    labelencoder = LabelEncoder()
+    categorical_columns.remove("country")
+    for categorical_column in categorical_columns:
+        df_train[[categorical_column]] = pd.DataFrame(labelencoder.fit_transform(df_train[categorical_column].copy()))
+        df_public[[categorical_column]] = pd.DataFrame(labelencoder.transform(df_public[categorical_column].copy()))
+    return df_train, df_public
+
+def onehot_encoding(df_train, df_public, categorical_columns):
+    print('One Hot encoding')
+
+    print(list(df_train.columns))
+    print(list(df_train.values[2]))
+    
+    onehot_encoder = OneHotEncoder()
+    for categorical_column in categorical_columns:
+        ohe_df = pd.DataFrame(onehot_encoder.fit_transform(df_train[[categorical_column]].copy()))
+        df_train = pd.concat([df_train, ohe_df], axis=1).drop([categorical_column], axis=1)
+        ohe_df = pd.DataFrame(onehot_encoder.transform(df_public[[categorical_column]].copy()))
+        df_public = pd.concat([df_public, ohe_df], axis=1).drop([categorical_column], axis=1)
+        print(list(df_train.columns))
+        print(list(df_train.values[2]))
+    # df_train = pd.get_dummies(df_train, columns = categorical_column)
+    # df_public = pd.get_dummies(df_public, columns = categorical_column)
+    return df_train, df_public
+
+def get_preprocessed_data(args, origin_label=False, load=True):
+    if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and load:
+        df_train = load_from_pickle(args.train_preprocessed_pickle)
+        df_public = load_from_pickle(args.public_preprocessed_pickle)
+    else:
+        df_train = get_train_data(args)
+        if origin_label:
+            df_train['label'] = df_train['sar_flag']
+        df_train = df_train.drop(columns=['cust_id', 'date'])
+        
+        df_public = get_public_data(args)
+        if origin_label:
+            df_public['label'] = df_public['sar_flag']
+        df_public = df_public.drop(columns=['cust_id', 'date'])
+
+        df_train['alert_key'] = df_train['alert_key'].astype(int)
+        df_public['alert_key'] = df_public['alert_key'].astype(int)
+
+        df_train, df_public = missing_process(df_train, df_public)
+
+        numerical_columns, categorical_columns = get_column_type(df_train)
+        df_train[numerical_columns], df_public[numerical_columns] = normalize(df_train, df_public, numerical_columns)
+
+        df_train, df_public = label_encoding(df_train, df_public, categorical_columns)
+
+        write_to_pickle(args.train_preprocessed_pickle, df_train)
+        write_to_pickle(args.public_preprocessed_pickle, df_public)
+    return df_train, df_public
+
+def pred_to_csv(args, df_pred):
+    # 考慮private alert key部分，滿足上傳條件
+
+    public_private_test_csv = os.path.join(args.data_dir, '預測的案件名單及提交檔案範例.csv')
+    df_public_private_test = pd.read_csv(public_private_test_csv)
+
+    df_pred['alert_key'] = df_pred['alert_key'].astype(int)
+    public_private_alert_key = df_public_private_test['alert_key'].values
+    non_exists_keys = list(set(public_private_alert_key) - set(df_pred['alert_key'].unique()))
+    non_exists_keys_index = pd.RangeIndex(len(non_exists_keys))
+    df_non_exists_keys = pd.DataFrame(0, index=non_exists_keys_index, columns=df_pred.columns)
+    df_non_exists_keys['alert_key'] = non_exists_keys
+    df_predicted = pd.concat([df_pred, df_non_exists_keys])
+    df_predicted.to_csv(args.pred_path, index=False)
+
+def evaluate(args):
+    df_pred = pd.read_csv(args.pred_path)
+    df_ans = pd.read_csv(args.ans_path)
+    df = df_pred.merge(df_ans)
+    sar_id = np.where(df['sar_flag'] == 1)[0]
+    n_sar = len(sar_id)
+    print(f'score: {n_sar / sar_id[-1]}\t{n_sar} / {sar_id[-1]}')
+    
 def write_to_pickle(path, data):
     with open(path, 'wb') as f:
         pickle.dump(data, f)
@@ -42,308 +298,6 @@ def load_from_pickle(path):
     with open(path, 'rb') as f:
         data = pickle.load(f)
     return data
-
-def preprocess_train(df_y, df_cus_info, df_date, cus_data, date_col, data_use_col):
-    cnts = [0] * 4
-    labels = []
-    training_data = []
-
-    print('Start processing training data...')
-    start = time.time()
-    for i in range(df_y.shape[0]):
-        # from alert key to get customer information
-        cur_data = df_y.iloc[i]
-        alert_key, label = cur_data['alert_key'], cur_data['sar_flag']
-
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        date = df_date[df_date['alert_key']==alert_key].iloc[0]['date']
-
-
-        cnt = 0
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                cnts[item] += 1
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-        labels.append(label)
-        training_data.append(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_y.shape[0]), end = '')
-    print('Processing time: {:.3f} secs'.format(time.time()-start))
-    print('Missing value of 4 csvs:', cnts)
-    return training_data, labels
-
-def preprocess_test_public(df_public_x, df_cus_info, cus_data, date_col, data_use_col):
-    print('Start processing public testing data')
-    testing_data, testing_alert_key = [], []
-    for i in range(df_public_x.shape[0]):
-        # from alert key to get customer information
-        cur_data = df_public_x.iloc[i]
-        alert_key, date = cur_data['alert_key'], cur_data['date']
-
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-
-        testing_data.append(cus_features)
-        testing_alert_key.append(alert_key)
-        # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
-    return testing_data, testing_alert_key
-
-def preprocess_test_private(private_keys, df_cus_info, cus_data, date_col, data_use_col):
-    print('Start processing private testing data')
-    testing_data, testing_alert_key = [], []
-    print(df_cus_info.shape)
-    for i, private_key in enumerate(private_keys):
-        # from alert key to get customer information
-        alert_key = private_key
-        date = 393
-        if len(df_cus_info[df_cus_info['alert_key']==alert_key]) == 0:
-            continue
-        print(i)
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-
-        testing_data.append(cus_features)
-        testing_alert_key.append(alert_key)
-        # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, len(private_keys)), end = '')
-    print('bye')
-    return testing_data, testing_alert_key
-
-
-def preprocess(data_dir, preprocess_data_dir):
-    # declare csv path
-
-    # [alert_key, date]
-    train_alert_date_csv = os.path.join(data_dir, 'train_x_alert_date.csv')
-    # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
-    cus_info_csv = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
-    # [alert_key, sar_flag]
-    y_csv = os.path.join(data_dir, 'train_y_answer.csv')
-
-    # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
-    ccba_csv = os.path.join(data_dir, 'public_train_x_ccba_full_hashed.csv')
-    # [cust_id, date, country, cur_type, amt]
-    cdtx_csv = os.path.join(data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
-    # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
-    dp_csv = os.path.join(data_dir, 'public_train_x_dp_full_hashed.csv')
-    # [cust_id, trans_date, trans_no, trade_amount_usd]
-    remit_csv = os.path.join(data_dir, 'public_train_x_remit1_full_hashed.csv')
-    # [alert_key, date]
-    public_x_csv = os.path.join(data_dir, 'public_x_alert_date.csv')
-    # [alert_key, sar_flag]
-    public_private_x_csv = os.path.join(data_dir, '預測的案件名單及提交檔案範例.csv')
-
-    training_data_file = os.path.join(preprocess_data_dir, 'training_data.pickle')
-    labels_file = os.path.join(preprocess_data_dir, 'labels.pickle')
-    public_testing_data_file = os.path.join(preprocess_data_dir, 'public_testing_data.pickle')
-    public_testing_alert_key_file = os.path.join(preprocess_data_dir, 'public_testing_alert_key.pickle')
-    private_testing_data_file = os.path.join(preprocess_data_dir, 'private_testing_data.pickle')
-    private_testing_alert_key_file = os.path.join(preprocess_data_dir, 'private_testing_alert_key.pickle')
-
-
-    cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
-    date_col = ['byymm', 'date', 'tx_date', 'trans_date']
-    data_use_col = [[1,3,4,5,6,7,8,9],[2,3,4],[1,4,5,6,7,8,9,10,11],[2,3]]
-    
-    print('Reading csv...')
-    # read csv
-    df_y = pd.read_csv(y_csv)
-    df_cus_info = pd.read_csv(cus_info_csv)
-    df_date = pd.read_csv(train_alert_date_csv)
-    cus_data = [pd.read_csv(_x) for _x in cus_csv]
-    df_public_x = pd.read_csv(public_x_csv)
-    df_public_private_x = pd.read_csv(public_private_x_csv)
-
-    # do label encoding
-    le = LabelEncoder()
-    cus_data[2].debit_credit = le.fit_transform(cus_data[2].debit_credit)
-    
-    if (os.path.exists(training_data_file) and os.path.exists(labels_file)):
-        training_data = load_from_pickle(training_data_file)
-        labels = load_from_pickle(labels_file)
-    else:
-        training_data, labels = preprocess_train(df_y, df_cus_info, df_date, cus_data, date_col, data_use_col)
-
-    if (os.path.exists(public_testing_data_file) and os.path.exists(public_testing_alert_key_file)):
-        public_testing_data = load_from_pickle(public_testing_data_file)
-        public_testing_alert_key = load_from_pickle(public_testing_alert_key_file)
-    else:
-        public_testing_data, public_testing_alert_key = preprocess_test_public(df_public_x, df_cus_info, cus_data, date_col, data_use_col)
-
-    if (os.path.exists(private_testing_data_file) and os.path.exists(private_testing_alert_key_file)):
-        private_testing_data = load_from_pickle(private_testing_data_file)
-        private_testing_alert_key = load_from_pickle(private_testing_alert_key_file)
-    else:
-        private_keys = list(set(df_public_private_x['alert_key']) - (set(df_public_x['alert_key'])))
-        private_testing_data, private_testing_alert_key = preprocess_test_private(private_keys, df_cus_info, cus_data, date_col, data_use_col)
-    
-    return np.array(training_data), labels, np.array(public_testing_data), public_testing_alert_key, np.array(private_testing_data), private_testing_alert_key,
-
-
-
-def generate_data(data_dir, preprocess_data_dir, training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file):
-    training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key = preprocess(data_dir, preprocess_data_dir)
-    write_to_pickle(training_data_file, training_data)
-    write_to_pickle(labels_file, labels)
-    write_to_pickle(public_testing_data_file, public_testing_data)
-    write_to_pickle(public_testing_alert_key_file, public_testing_alert_key)
-    write_to_pickle(private_testing_data_file, private_testing_data)
-    write_to_pickle(private_testing_alert_key_file, private_testing_alert_key)
-    return training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key
-
-
-def load_data(training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file):
-    training_data = load_from_pickle(training_data_file)
-    labels = load_from_pickle(labels_file)
-    public_testing_data = load_from_pickle(public_testing_data_file)
-    public_testing_alert_key = load_from_pickle(public_testing_alert_key_file)
-    private_testing_data = load_from_pickle(private_testing_data_file)
-    private_testing_alert_key = load_from_pickle(private_testing_alert_key_file)
-    return training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key
-
-
-def get_data(data_dir='./data', preprocess_data_dir='preprocess_data'):
-    training_data_file = os.path.join(preprocess_data_dir, 'training_data.pickle')
-    labels_file = os.path.join(preprocess_data_dir, 'labels.pickle')
-    public_testing_data_file = os.path.join(preprocess_data_dir, 'public_testing_data.pickle')
-    public_testing_alert_key_file = os.path.join(preprocess_data_dir, 'public_testing_alert_key.pickle')
-    private_testing_data_file = os.path.join(preprocess_data_dir, 'private_testing_data.pickle')
-    private_testing_alert_key_file = os.path.join(preprocess_data_dir, 'private_testing_alert_key.pickle')
-    if (os.path.exists(training_data_file) and os.path.exists(labels_file) and os.path.exists(public_testing_data_file) and os.path.exists(public_testing_alert_key_file) and os.path.exists(private_testing_data_file) and os.path.exists(private_testing_alert_key_file)) != 1:
-        return generate_data(data_dir, preprocess_data_dir, training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file)
-    else:
-        return load_data(training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file)
-
-
-def missing_imputate(training_data, testing_data, numerical_index, non_numerical_index, labels, remove_threshold_ratio=0.4):
-    """## 缺失值補漏
-    可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
-    """
-
-    ''' Missing Value Imputation '''
-    imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
-    imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
-
-
-    numerical_data = training_data[:, numerical_index]
-    non_numerical_data = training_data[:, non_numerical_index]
-
-    remove_feature = np.count_nonzero(pd.isna(training_data), axis=0) > int(np.shape(training_data)[0] * remove_threshold_ratio)
-    # training_data = np.delete(training_data, np.where(remove_feature)[0], 1)
-    numerical_index = np.setdiff1d(numerical_index, np.where(remove_feature)[0])
-    non_numerical_index = np.setdiff1d(non_numerical_index, np.where(remove_feature)[0])
-
-    remove_record = np.count_nonzero(pd.isna(training_data), axis=1) > int(np.shape(training_data)[1] * remove_threshold_ratio)
-    training_data = np.delete(training_data, np.where(remove_record)[0], 0)
-    labels = np.delete(labels, np.where(remove_record)[0])
-    
-
-    numerical_data = training_data[:, numerical_index]
-    non_numerical_data = training_data[:, non_numerical_index]
-
-    imp_median.fit(numerical_data)
-    numerical_data = imp_median.transform(numerical_data)
-
-    imp_most_frequent.fit(non_numerical_data)
-    non_numerical_data = imp_most_frequent.transform(non_numerical_data)
-
-    training_data = np.concatenate((non_numerical_data, numerical_data), axis=1)
-
-    test_numerical_data = testing_data[:, numerical_index]
-    test_non_numerical_data = testing_data[:, non_numerical_index]
-
-    test_numerical_data = imp_median.transform(test_numerical_data)
-
-    test_non_numerical_data = imp_most_frequent.transform(test_non_numerical_data)
-
-    testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
-
-    non_numerical_index = list(range(len(non_numerical_index)))
-    numerical_index = list(range(len(non_numerical_index), len(numerical_index) + len(non_numerical_index)))
-
-    return training_data, testing_data, numerical_index, non_numerical_index, labels
-
-def normalize(training_data, public_testing_data, numerical_index, non_numerical_index):
-    
-    train_numerical_data = training_data[:, numerical_index]
-    train_non_numerical_data = training_data[:, non_numerical_index]
-    normalized_feature = np.mean(train_numerical_data, axis=0) > 100
-    normalized_feature_ids = np.where(normalized_feature)[0]
-    train_numerical_data[:, normalized_feature_ids] = MinMaxScaler().fit_transform(train_numerical_data[:, normalized_feature_ids])
-    training_data = np.concatenate((train_non_numerical_data, train_numerical_data), axis=1)
-
-    test_numerical_data = public_testing_data[:, numerical_index]
-    test_non_numerical_data = public_testing_data[:, non_numerical_index]
-    normalized_feature = np.average(test_numerical_data, axis=0) > 100
-    normalized_feature_ids = np.where(normalized_feature)[0]
-    test_numerical_data[:, normalized_feature_ids] = MinMaxScaler().fit_transform(test_numerical_data[:, normalized_feature_ids])
-    testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
-    return training_data, testing_data
-
-def onehot_encoding(training_data, testing_data, one_hot_index):
-    onehotencorder = ColumnTransformer(
-        [('one_hot_encoder', OneHotEncoder(handle_unknown='ignore'), one_hot_index)],
-        remainder='passthrough'                     
-    )
-    onehotencorder.fit(training_data)
-    training_data = onehotencorder.transform(training_data)
-    testing_data = onehotencorder.transform(testing_data)
-
-    return training_data, testing_data
 
 def save_checkpoint(checkpoint_path, model):
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
