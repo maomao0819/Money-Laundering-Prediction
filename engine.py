@@ -11,6 +11,11 @@ from model import DNN_Model, DNN_Model_Prob
 from torch.utils.data import DataLoader
 import pickle
 from sklearn.pipeline import make_pipeline
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn import svm
+import xgboost as xgb
 
 def seed_everything(args):
     np.random.seed(args.seed)
@@ -141,30 +146,90 @@ def model_pred(
     prediction = sorted(prediction, reverse=True, key= lambda s: s[0])
     return prediction
 
-def model_prob(args, df_train, df_public, load=False):
+def model_prob(args, df_train, df_public, df_private, pred_type='public', load=False, load_to_train=False):
     df_train = df_train.drop(columns=['sar_flag'])
     df_public = df_public.drop(columns=['sar_flag'])
-    dnn = model_train(args, df_train, df_public, load=load)
+    df_private = df_private.drop(columns=['sar_flag'])
+    if os.path.exists(args.load) and load:
+        model = DNN_Model(n_feature=len(df_train.columns)-2).to(args.device)
+        dnn = utils.load_checkpoint(args.load, model)
+    else:
+        dnn = model_train(args, df_train, df_public, load=load_to_train)
     dnn_prob = DNN_Model_Prob(n_feature=len(df_train.columns)-2).to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
-    pred = model_pred(args, dnn_prob, df_public)
+    if pred_type == 'public':
+        pred = model_pred(args, dnn_prob, df_public)
+    else:
+        pred = model_pred(args, dnn_prob, df_private)
     df_pred = pd.DataFrame(pred, columns = ['alert_key','probability'])
     df_pred = df_pred.groupby('alert_key').mean().reset_index()
     df_pred = df_pred.sort_values(by=['alert_key'], ascending=True).reset_index(drop=True)
     return df_pred
 
-def ML_model_prob(model, df_train, df_public, label_column='sar_flag'):
+def ML_model_prob(model, df_train, df_test, label_column='sar_flag'):
     model = make_pipeline(model)
     df_train_data = df_train.drop(columns=['sar_flag', 'alert_key', 'label'])
-    df_public_data = df_public.drop(columns=['sar_flag', 'alert_key', 'label'])
+    df_test_data = df_test.drop(columns=['sar_flag', 'alert_key', 'label'])
     model.fit(df_train_data, df_train[label_column])
     predicted_probs = []
-    for predicted_prob in model.predict_proba(df_public_data):
+    for predicted_prob in model.predict_proba(df_test_data):
         predicted_probs.append(predicted_prob[1])
 
-    pred_data = {'alert_key': df_public['alert_key'],
+    pred_data = {'alert_key': df_test['alert_key'],
             'probability': predicted_probs
     }
     df_pred = pd.DataFrame(pred_data)
+    df_pred = df_pred.groupby('alert_key').mean().reset_index()
     df_pred = df_pred.sort_values(by=['alert_key'], ascending=True).reset_index(drop=True)
+    print('Predict Finish')
     return df_pred
+
+def predict(args, df_train, df_public, df_private, pred_type='public', load=False, load_to_train=False):
+    if pred_type == 'public':
+        df_test = df_public
+    else:
+        df_test = df_private
+
+    xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
+        n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
+        max_depth=6,               # 樹的深度
+        min_child_weight = 1,      # 葉子節點最小權重
+        gamma=0.,                  # 懲罰項中葉子結點個數前的參數
+        subsample=0.8,             # 隨機選擇80%樣本建立決策樹
+    #   objective='multi:softmax', # 指定損失函數
+        scale_pos_weight=1,        # 解決樣本個數不平衡的問題
+        random_state=0            # 隨機數
+    )
+
+    """# RandomForestClassifier 訓練"""
+    RFC = RandomForestClassifier(n_estimators = 100)
+
+    """# KNeighborsClassifier 訓練"""
+    KNN = KNeighborsClassifier(n_neighbors=3)
+
+    """# DecisionTreeClassifier 訓練"""
+    DT = DecisionTreeClassifier()
+    
+    """# SVM 訓練"""
+    svc = svm.SVC(C=1.0, probability=True)
+    svr = svm.SVR(C=1.0, epsilon=0.2)
+
+    # df_pred_xgbr = ML_model_prob(xgbrModel, df_train, df_test, label_column='sar_flag')
+    # df_pred_RFC = ML_model_prob(RFC, df_train, df_test, label_column='sar_flag')
+    df_pred_KNN = ML_model_prob(KNN, df_train, df_test, label_column='sar_flag')
+    # df_pred_DT = ML_model_prob(DT, df_train, df_test, label_column='sar_flag')
+    # df_pred_SVC = ML_model_prob(svc, df_train, df_test, label_column='sar_flag')
+    # df_pred_SVR = ML_model_prob(svr, df_train, df_test, label_column='label')
+    df_pred_dnn = model_prob(args, df_train, df_public, df_private, pred_type=pred_type, load=load, load_to_train=load_to_train)
+
+    # pred_prob = 10 * df_pred_xgbr['probability'] + df_pred_RFC['probability'] + df_pred_KNN['probability'] + \
+    #     df_pred_DT['probability'] + df_pred_SVC['probability'] + 2 * df_pred_SVR['probability'] + 12 * df_pred_dnn['probability']
+    pred_prob = df_pred_KNN['probability'] + 12 * df_pred_dnn['probability']
+    pred_data = {'alert_key': df_pred_dnn['alert_key'],
+            'probability': pred_prob
+    }
+    df_pred = pd.DataFrame(pred_data)
+    df_pred = df_pred.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
+    utils.pred_to_csv(args, df_pred)
+    if pred_type == 'public':
+        utils.evaluate(args)

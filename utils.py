@@ -31,15 +31,15 @@ baseline主要會使用到的csv檔案如下:
   - 統計 training data 缺失值數量
 """
 
-def load_cus_df(args):
+def load_cus_df(args, split='public_train'):
     # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
-    ccba_csv = os.path.join(args.data_dir, 'public_train_x_ccba_full_hashed.csv')
+    ccba_csv = os.path.join(args.data_dir, f'{split}_x_ccba_full_hashed.csv')
     # [cust_id, date, country, cur_type, amt]
-    cdtx_csv = os.path.join(args.data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
+    cdtx_csv = os.path.join(args.data_dir, f'{split}_x_cdtx0001_full_hashed.csv')
     # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
-    dp_csv = os.path.join(args.data_dir, 'public_train_x_dp_full_hashed.csv')
+    dp_csv = os.path.join(args.data_dir, f'{split}_x_dp_full_hashed.csv')
     # [cust_id, trans_date, trans_no, trade_amount_usd]
-    remit_csv = os.path.join(args.data_dir, 'public_train_x_remit1_full_hashed.csv')
+    remit_csv = os.path.join(args.data_dir, f'{split}_x_remit1_full_hashed.csv')
     cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
     cus_data = [pd.read_csv(_x) for _x in cus_csv]
     cus_data[1].rename(columns = {'date': 'c_date'}, inplace = True)
@@ -137,6 +137,23 @@ def generate_public_data(args):
     write_to_pickle(args.public_pickle, df_data)
     return df_data
 
+def generate_private_data(args):
+
+    # [alert_key, date]
+    private_alert_date_csv = os.path.join(args.data_dir, 'private_x_alert_date.csv')
+    # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
+    cus_info_csv = os.path.join(args.data_dir, 'private_x_custinfo_full_hashed.csv')
+
+    df_cus_info = pd.read_csv(cus_info_csv)
+    df_date = pd.read_csv(private_alert_date_csv)
+    cus_data = load_cus_df(args, split='private')
+
+    df_data = df_date.merge(df_cus_info)
+
+    df_data = concat_cus_data(args, df_data, cus_data)
+    write_to_pickle(args.private_pickle, df_data)
+    return df_data
+
 def get_train_data(args):
     if os.path.exists(args.train_pickle):
         df_train = load_from_pickle(args.train_pickle)
@@ -151,6 +168,13 @@ def get_public_data(args):
         df_public = generate_public_data(args)
     return df_public
 
+def get_private_data(args):
+    if os.path.exists(args.private_pickle):
+        df_private = load_from_pickle(args.private_pickle)
+    else:
+        df_private = generate_private_data(args)
+    return df_private
+
 def get_column_type(df_data):
     categorical_column = ['byymm', 'date', 'country', 'cur_type', 'risk_rank', 'occupation_code', 'AGE', 'debit_credit', 'tx_date', 'tx_time', 'tx_type', 'info_asset_code', 'fiscTxId', 'txbranch', 'cross_bank', 'ATM', 'trans_date', 'trans_no', 'sar_flag']
     no_process_column = ['alert_key', 'sar_flag', 'cust_id', 'label']
@@ -163,17 +187,18 @@ def get_column_type(df_data):
     categorical_column = list(categorical_column)
     return numerical_column, categorical_column
 
-def missing_remove(df_train, df_test, remove_threshold_ratio=0.6):
+def missing_remove(df_train, df_public, df_private, remove_threshold_ratio=0.6):
     keep_columns = df_train.notnull().sum(axis = 0) > len(df_train) * remove_threshold_ratio
     df_train = df_train[df_train.columns[keep_columns]]
     keep_rows = df_train.notnull().sum(axis = 1) > len(df_train.columns) * remove_threshold_ratio
     df_train = df_train[keep_rows]
     df_train = df_train.drop_duplicates()
     df_train = df_train.reset_index(drop=True)
-    df_test = df_test[df_train.columns]
-    return df_train, df_test
+    df_public = df_public[df_train.columns]
+    df_private = df_private[df_train.columns]
+    return df_train, df_public, df_private
 
-def missing_imputate(df_train, df_test):
+def missing_imputate(df_train, df_public, df_private):
     """## 缺失值補漏
     可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
     """
@@ -184,41 +209,46 @@ def missing_imputate(df_train, df_test):
     numerical_columns, categorical_columns = get_column_type(df_train)
     for numerical_column in numerical_columns:
         df_train[[numerical_column]] = imp_median.fit_transform(df_train[[numerical_column]])
-        df_test[[numerical_column]] = pd.DataFrame(imp_median.transform(df_test[[numerical_column]].copy()))
+        df_public[[numerical_column]] = pd.DataFrame(imp_median.transform(df_public[[numerical_column]].copy()))
+        df_private[[numerical_column]] = pd.DataFrame(imp_median.transform(df_private[[numerical_column]].copy()))
     categorical_columns.append('label')
     categorical_columns.append('sar_flag')
     for categorical_column in categorical_columns:
         df_train[[categorical_column]] = imp_most_frequent.fit_transform(df_train[[categorical_column]])
-        df_test[[categorical_column]] = pd.DataFrame(imp_most_frequent.transform(df_test[[categorical_column]].copy()))
-    return df_train, df_test
+        df_public[[categorical_column]] = pd.DataFrame(imp_most_frequent.transform(df_public[[categorical_column]].copy()))
+        df_private[[categorical_column]] = pd.DataFrame(imp_most_frequent.transform(df_private[[categorical_column]].copy()))
+    return df_train, df_public, df_private
 
-def missing_process(df_train, df_test, remove_threshold_ratio=0.5):
+def missing_process(df_train, df_public, df_private, remove_threshold_ratio=0.9):
     print('missing processing')
-    df_train, df_test = missing_remove(df_train, df_test, remove_threshold_ratio=remove_threshold_ratio)
-    df_train, df_test = missing_imputate(df_train, df_test)
+    df_train, df_public, df_private = missing_remove(df_train, df_public, df_private, remove_threshold_ratio=remove_threshold_ratio)
+    df_train, df_public, df_private = missing_imputate(df_train, df_public, df_private)
     
-    return df_train, df_test
+    return df_train, df_public, df_private
 
-def normalize(df_train, df_public, numerical_columns):
+def normalize(df_train, df_public, df_private, numerical_columns):
     print('normalizing')
     minmax = MinMaxScaler()
     df_train_numerical = df_train[numerical_columns].copy()
-    normalized_column = df_train_numerical.mean(axis=0) > 100
     df_public_numerical = df_public[numerical_columns].copy()
-    normalized_column = df_public_numerical.mean(axis=0) > 100
-    for numerical_column in numerical_columns:
-        df_train_numerical[[numerical_column]] = pd.DataFrame(minmax.fit_transform(df_train_numerical[[numerical_column]].copy()))
-        df_public_numerical[[numerical_column]] = pd.DataFrame(minmax.transform(df_public_numerical[[numerical_column]].copy()))
-    return df_train_numerical, df_public_numerical
+    df_private_numerical = df_private[numerical_columns].copy()
+    normalized_columns = df_train_numerical.mean(axis=0) > 100
+    normalized_columns = df_train_numerical.columns[normalized_columns]
+    for normalized_column in normalized_columns:
+        df_train_numerical[[normalized_column]] = pd.DataFrame(minmax.fit_transform(df_train_numerical[[normalized_column]].copy()))
+        df_public_numerical[[normalized_column]] = pd.DataFrame(minmax.transform(df_public_numerical[[normalized_column]].copy()))
+        df_private_numerical[[normalized_column]] = pd.DataFrame(minmax.transform(df_private_numerical[[normalized_column]].copy()))
+    return df_train_numerical, df_public_numerical, df_private_numerical
 
-def label_encoding(df_train, df_public, categorical_columns):
+def label_encoding(df_train, df_public, df_private, categorical_columns):
     print('label encoding')
     labelencoder = LabelEncoder()
     categorical_columns.remove("country")
     for categorical_column in categorical_columns:
         df_train[[categorical_column]] = pd.DataFrame(labelencoder.fit_transform(df_train[categorical_column].copy()))
         df_public[[categorical_column]] = pd.DataFrame(labelencoder.transform(df_public[categorical_column].copy()))
-    return df_train, df_public
+        df_private[[categorical_column]] = pd.DataFrame(labelencoder.transform(df_private[categorical_column].copy()))
+    return df_train, df_public, df_private
 
 def onehot_encoding(df_train, df_public, categorical_columns):
     print('One Hot encoding')
@@ -238,34 +268,41 @@ def onehot_encoding(df_train, df_public, categorical_columns):
     # df_public = pd.get_dummies(df_public, columns = categorical_column)
     return df_train, df_public
 
-def get_preprocessed_data(args, origin_label=False, load=True):
-    if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and load:
+def get_preprocessed_data(args, load=True):
+    if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and os.path.exists(args.private_preprocessed_pickle)and load:
         df_train = load_from_pickle(args.train_preprocessed_pickle)
         df_public = load_from_pickle(args.public_preprocessed_pickle)
+        df_private = load_from_pickle(args.private_preprocessed_pickle)
     else:
         df_train = get_train_data(args)
-        if origin_label:
+        if args.origin_label:
             df_train['label'] = df_train['sar_flag']
         df_train = df_train.drop(columns=['cust_id', 'date'])
         
         df_public = get_public_data(args)
-        if origin_label:
+        if args.origin_label:
             df_public['label'] = df_public['sar_flag']
         df_public = df_public.drop(columns=['cust_id', 'date'])
 
+        df_private = get_private_data(args)
+        df_private['sar_flag'] = df_private['label']
+        df_private = df_private.drop(columns=['cust_id', 'date'])
+
         df_train['alert_key'] = df_train['alert_key'].astype(int)
         df_public['alert_key'] = df_public['alert_key'].astype(int)
+        df_private['alert_key'] = df_private['alert_key'].astype(int)
 
-        df_train, df_public = missing_process(df_train, df_public)
+        df_train, df_public, df_private = missing_process(df_train, df_public, df_private)
 
         numerical_columns, categorical_columns = get_column_type(df_train)
-        df_train[numerical_columns], df_public[numerical_columns] = normalize(df_train, df_public, numerical_columns)
+        df_train[numerical_columns], df_public[numerical_columns], df_private[numerical_columns] = normalize(df_train, df_public, df_private, numerical_columns)
 
-        df_train, df_public = label_encoding(df_train, df_public, categorical_columns)
+        df_train, df_public, df_private = label_encoding(df_train, df_public, df_private, categorical_columns)
 
         write_to_pickle(args.train_preprocessed_pickle, df_train)
         write_to_pickle(args.public_preprocessed_pickle, df_public)
-    return df_train, df_public
+        write_to_pickle(args.private_preprocessed_pickle, df_private)
+    return df_train, df_public, df_private
 
 def pred_to_csv(args, df_pred):
     # 考慮private alert key部分，滿足上傳條件
@@ -281,6 +318,7 @@ def pred_to_csv(args, df_pred):
     df_non_exists_keys['alert_key'] = non_exists_keys
     df_predicted = pd.concat([df_pred, df_non_exists_keys])
     df_predicted.to_csv(args.pred_path, index=False)
+    print('Output to csv')
 
 def evaluate(args):
     df_pred = pd.read_csv(args.pred_path)
@@ -289,7 +327,7 @@ def evaluate(args):
     sar_id = np.where(df['sar_flag'] == 1)[0]
     n_sar = len(sar_id)
     print(f'score: {n_sar / sar_id[-1]}\t{n_sar} / {sar_id[-1]}')
-    
+
 def write_to_pickle(path, data):
     with open(path, 'wb') as f:
         pickle.dump(data, f)
