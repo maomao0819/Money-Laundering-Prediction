@@ -288,10 +288,6 @@ def get_preprocessed_data(args):
         df_private['sar_flag'] = df_private['label']
         df_private = df_private.drop(columns=['cust_id', 'date'])
 
-        df_train['alert_key'] = df_train['alert_key'].astype(int)
-        df_public['alert_key'] = df_public['alert_key'].astype(int)
-        df_private['alert_key'] = df_private['alert_key'].astype(int)
-
         df_train, df_public, df_private = missing_process(df_train, df_public, df_private)
 
         numerical_columns, categorical_columns = get_column_type(df_train)
@@ -299,6 +295,10 @@ def get_preprocessed_data(args):
 
         df_train, df_public, df_private = label_encoding(df_train, df_public, df_private, categorical_columns)
 
+        df_train['alert_key'] = df_train['alert_key'].astype(int)
+        df_public['alert_key'] = df_public['alert_key'].astype(int)
+        df_private['alert_key'] = df_private['alert_key'].astype(int)
+        
         write_to_pickle(args.train_preprocessed_pickle, df_train)
         write_to_pickle(args.public_preprocessed_pickle, df_public)
         write_to_pickle(args.private_preprocessed_pickle, df_private)
