@@ -17,8 +17,8 @@ def parse_args() -> Namespace:
     # data preprocess
     parser.add_argument("--n_day_range", default=5, type=int)
     parser.add_argument("--df_batch_size", default=128, type=int)
-    parser.add_argument("--load_data", default=False, type=bool)
-    parser.add_argument("--origin_label", default=False, type=bool)
+    parser.add_argument("--load_data", default=False, type=bool, help="load data if exists")
+    parser.add_argument("--origin_label", default=False, type=bool, help="use binary label without considering the dates are near or far ")
 
     # preprocess data path
     parser.add_argument("--train_pickle", default='./preprocess_data/train_5.pickle', type=str)
@@ -29,8 +29,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--private_preprocessed_pickle", default='./preprocess_data/private_preprocessed_5.pickle', type=str)
     
     # model
-    parser.add_argument("--load_model", default=False, type=bool)
-    parser.add_argument("--load_to_train", default=False, type=bool)
+    parser.add_argument("--load_model", default=False, type=bool, help="load model and won't train if exists")
+    parser.add_argument("--load_to_train", default=False, type=bool, help="load model and continue to train if exists")
     parser.add_argument("--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cuda")
     parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
     parser.add_argument("--seed", default=100, type=int, help="the seed (default 100)")
