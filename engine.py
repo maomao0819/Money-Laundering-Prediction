@@ -224,7 +224,7 @@ def predict(args, df_train, df_public, df_private, pred_type='public'):
 
     # pred_prob = 10 * df_pred_xgbr['probability'] + df_pred_RFC['probability'] + df_pred_KNN['probability'] + \
     #     df_pred_DT['probability'] + df_pred_SVC['probability'] + 2 * df_pred_SVR['probability'] + 12 * df_pred_dnn['probability']
-    pred_prob = df_pred_dnn['probability'] + 2 * df_pred_xgbr['probability']
+    pred_prob = df_pred_xgbr['probability'] * 5 + df_pred_dnn['probability']
     pred_data = {'alert_key': df_pred_dnn['alert_key'],
             'probability': pred_prob
     }

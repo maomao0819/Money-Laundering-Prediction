@@ -88,12 +88,12 @@ def preprocess_train(df_y, df_cus_info, df_date, cus_data, date_col, data_use_co
     print('Missing value of 4 csvs:', cnts)
     return training_data, labels
 
-def preprocess_test_public(df_public_x, df_cus_info, cus_data, date_col, data_use_col):
-    print('Start processing public testing data')
+def preprocess_test(df_test_x, df_cus_info, cus_data, date_col, data_use_col):
+    print('Start processing testing data')
     testing_data, testing_alert_key = [], []
-    for i in range(df_public_x.shape[0]):
+    for i in range(df_test_x.shape[0]):
         # from alert key to get customer information
-        cur_data = df_public_x.iloc[i]
+        cur_data = df_test_x.iloc[i]
         alert_key, date = cur_data['alert_key'], cur_data['date']
 
         cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
@@ -120,48 +120,9 @@ def preprocess_test_public(df_public_x, df_cus_info, cus_data, date_col, data_us
         testing_data.append(cus_features)
         testing_alert_key.append(alert_key)
         # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
+        print('\r processing data {}/{}'.format(i+1, df_test_x.shape[0]), end = '')
     return testing_data, testing_alert_key
 
-def preprocess_test_private(private_keys, df_cus_info, cus_data, date_col, data_use_col):
-    print('Start processing private testing data')
-    testing_data, testing_alert_key = [], []
-    print(df_cus_info.shape)
-    for i, private_key in enumerate(private_keys):
-        # from alert key to get customer information
-        alert_key = private_key
-        date = 393
-        if len(df_cus_info[df_cus_info['alert_key']==alert_key]) == 0:
-            continue
-        print(i)
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
-
-        cus_id = cus_info['cust_id']
-        cus_features = cus_info.values[2:]
-
-        for item, df in enumerate(cus_data):
-            cus_additional_info = df[df['cust_id']==cus_id]
-            cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
-
-            if cus_additional_info.empty:
-                len_item = len(data_use_col[item])
-                if item == 2:
-                    len_item -= 1
-                cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
-            else:
-                cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
-                cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
-                # 處理 實際金額 = 匯率*金額
-                if item == 2:
-                    cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
-                cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
-
-        testing_data.append(cus_features)
-        testing_alert_key.append(alert_key)
-        # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, len(private_keys)), end = '')
-    print('bye')
-    return testing_data, testing_alert_key
 
 
 def preprocess(data_dir, preprocess_data_dir):
@@ -170,20 +131,33 @@ def preprocess(data_dir, preprocess_data_dir):
     # [alert_key, date]
     train_alert_date_csv = os.path.join(data_dir, 'train_x_alert_date.csv')
     # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
-    cus_info_csv = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    cus_info_csv_public = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    cus_info_csv_private = os.path.join(data_dir, 'private_x_custinfo_full_hashed.csv')
     # [alert_key, sar_flag]
     y_csv = os.path.join(data_dir, 'train_y_answer.csv')
 
     # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
-    ccba_csv = os.path.join(data_dir, 'public_train_x_ccba_full_hashed.csv')
+    public_ccba_csv = os.path.join(data_dir, 'public_train_x_ccba_full_hashed.csv')
     # [cust_id, date, country, cur_type, amt]
-    cdtx_csv = os.path.join(data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
+    public_cdtx_csv = os.path.join(data_dir, 'public_train_x_cdtx0001_full_hashed.csv')
     # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
-    dp_csv = os.path.join(data_dir, 'public_train_x_dp_full_hashed.csv')
+    public_dp_csv = os.path.join(data_dir, 'public_train_x_dp_full_hashed.csv')
     # [cust_id, trans_date, trans_no, trade_amount_usd]
-    remit_csv = os.path.join(data_dir, 'public_train_x_remit1_full_hashed.csv')
+    public_remit_csv = os.path.join(data_dir, 'public_train_x_remit1_full_hashed.csv')
     # [alert_key, date]
     public_x_csv = os.path.join(data_dir, 'public_x_alert_date.csv')
+    
+    # [cust_id, lupay, byymm, cycam, usgam, clamt, csamt, inamt, cucsm, cucah]
+    private_ccba_csv = os.path.join(data_dir, 'private_x_ccba_full_hashed.csv')
+    # [cust_id, date, country, cur_type, amt]
+    private_cdtx_csv = os.path.join(data_dir, 'private_x_cdtx0001_full_hashed.csv')
+    # [cust_id, debit_credit, tx_date, tx_time, tx_type, tx_amt, exchg_rate, info_asset_code, fiscTxId, txbranch, cross_bank, ATM]
+    private_dp_csv = os.path.join(data_dir, 'private_x_dp_full_hashed.csv')
+    # [cust_id, trans_date, trans_no, trade_amount_usd]
+    private_remit_csv = os.path.join(data_dir, 'private_x_remit1_full_hashed.csv')
+    # [alert_key, date]
+    private_x_csv = os.path.join(data_dir, 'private_x_alert_date.csv')
+
     # [alert_key, sar_flag]
     public_private_x_csv = os.path.join(data_dir, '預測的案件名單及提交檔案範例.csv')
 
@@ -195,47 +169,52 @@ def preprocess(data_dir, preprocess_data_dir):
     private_testing_alert_key_file = os.path.join(preprocess_data_dir, 'private_testing_alert_key.pickle')
 
 
-    cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
+    public_cus_csv = [public_ccba_csv, public_cdtx_csv, public_dp_csv, public_remit_csv]
+    private_cus_csv = [private_ccba_csv, private_cdtx_csv, private_dp_csv, private_remit_csv]
     date_col = ['byymm', 'date', 'tx_date', 'trans_date']
     data_use_col = [[1,3,4,5,6,7,8,9],[2,3,4],[1,4,5,6,7,8,9,10,11],[2,3]]
     
     print('Reading csv...')
     # read csv
     df_y = pd.read_csv(y_csv)
-    df_cus_info = pd.read_csv(cus_info_csv)
-    df_date = pd.read_csv(train_alert_date_csv)
-    cus_data = [pd.read_csv(_x) for _x in cus_csv]
+    df_cus_info_public = pd.read_csv(cus_info_csv_public)
+    df_cus_info_private = pd.read_csv(cus_info_csv_private)
+    df_date_train = pd.read_csv(train_alert_date_csv)
+    cus_data_public = [pd.read_csv(_x) for _x in public_cus_csv]
+    cus_data_private = [pd.read_csv(_x) for _x in private_cus_csv]
     df_public_x = pd.read_csv(public_x_csv)
+    df_private_x = pd.read_csv(private_x_csv)
     df_public_private_x = pd.read_csv(public_private_x_csv)
 
     # do label encoding
     le = LabelEncoder()
-    cus_data[2].debit_credit = le.fit_transform(cus_data[2].debit_credit)
+    cus_data_public[2].debit_credit = le.fit_transform(cus_data_public[2].debit_credit)
+    cus_data_private[2].debit_credit = le.fit_transform(cus_data_private[2].debit_credit)
     
     if (os.path.exists(training_data_file) and os.path.exists(labels_file)):
         training_data = load_from_pickle(training_data_file)
         labels = load_from_pickle(labels_file)
     else:
-        training_data, labels = preprocess_train(df_y, df_cus_info, df_date, cus_data, date_col, data_use_col)
+        training_data, labels = preprocess_train(df_y, df_cus_info_public, df_date, cus_data_public, date_col, data_use_col)
 
     if (os.path.exists(public_testing_data_file) and os.path.exists(public_testing_alert_key_file)):
         public_testing_data = load_from_pickle(public_testing_data_file)
         public_testing_alert_key = load_from_pickle(public_testing_alert_key_file)
     else:
-        public_testing_data, public_testing_alert_key = preprocess_test_public(df_public_x, df_cus_info, cus_data, date_col, data_use_col)
+        public_testing_data, public_testing_alert_key = preprocess_test(df_public_x, df_cus_info_public, cus_data_public, date_col, data_use_col)
 
     if (os.path.exists(private_testing_data_file) and os.path.exists(private_testing_alert_key_file)):
         private_testing_data = load_from_pickle(private_testing_data_file)
         private_testing_alert_key = load_from_pickle(private_testing_alert_key_file)
     else:
-        private_keys = list(set(df_public_private_x['alert_key']) - (set(df_public_x['alert_key'])))
-        private_testing_data, private_testing_alert_key = preprocess_test_private(private_keys, df_cus_info, cus_data, date_col, data_use_col)
+        private_testing_data, private_testing_alert_key = preprocess_test(df_private_x, df_cus_info_private, cus_data_private, date_col, data_use_col)
     
     return np.array(training_data), labels, np.array(public_testing_data), public_testing_alert_key, np.array(private_testing_data), private_testing_alert_key,
 
 
 
 def generate_data(data_dir, preprocess_data_dir, training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file):
+    print('generating data')
     training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key = preprocess(data_dir, preprocess_data_dir)
     write_to_pickle(training_data_file, training_data)
     write_to_pickle(labels_file, labels)
@@ -247,6 +226,7 @@ def generate_data(data_dir, preprocess_data_dir, training_data_file, labels_file
 
 
 def load_data(training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file):
+    print('loading data')
     training_data = load_from_pickle(training_data_file)
     labels = load_from_pickle(labels_file)
     public_testing_data = load_from_pickle(public_testing_data_file)
@@ -257,6 +237,7 @@ def load_data(training_data_file, labels_file, public_testing_data_file, public_
 
 
 def get_data(data_dir='./data', preprocess_data_dir='preprocess_data'):
+    print('getting data')
     training_data_file = os.path.join(preprocess_data_dir, 'training_data.pickle')
     labels_file = os.path.join(preprocess_data_dir, 'labels.pickle')
     public_testing_data_file = os.path.join(preprocess_data_dir, 'public_testing_data.pickle')
@@ -269,12 +250,13 @@ def get_data(data_dir='./data', preprocess_data_dir='preprocess_data'):
         return load_data(training_data_file, labels_file, public_testing_data_file, public_testing_alert_key_file, private_testing_data_file, private_testing_alert_key_file)
 
 
-def missing_imputate(training_data, testing_data, numerical_index, non_numerical_index, labels, remove_threshold_ratio=0.4):
+def missing_imputate(training_data, public_testing_data, private_testing_data, numerical_index, non_numerical_index, labels, remove_threshold_ratio=0.6):
     """## 缺失值補漏
     可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
     """
 
     ''' Missing Value Imputation '''
+    print('Missing Value Imputation')
     imp_median = SimpleImputer(missing_values=np.nan, strategy='median')
     imp_most_frequent = SimpleImputer(missing_values=np.nan, strategy='most_frequent')
 
@@ -303,22 +285,31 @@ def missing_imputate(training_data, testing_data, numerical_index, non_numerical
 
     training_data = np.concatenate((non_numerical_data, numerical_data), axis=1)
 
-    test_numerical_data = testing_data[:, numerical_index]
-    test_non_numerical_data = testing_data[:, non_numerical_index]
+    public_test_numerical_data = public_testing_data[:, numerical_index]
+    public_test_non_numerical_data = public_testing_data[:, non_numerical_index]
 
-    test_numerical_data = imp_median.transform(test_numerical_data)
+    public_test_numerical_data = imp_median.transform(public_test_numerical_data)
 
-    test_non_numerical_data = imp_most_frequent.transform(test_non_numerical_data)
+    public_test_non_numerical_data = imp_most_frequent.transform(public_test_non_numerical_data)
 
-    testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
+    public_testing_data = np.concatenate((public_test_non_numerical_data, public_test_numerical_data), axis=1)
+
+    private_test_numerical_data = private_testing_data[:, numerical_index]
+    private_test_non_numerical_data = private_testing_data[:, non_numerical_index]
+
+    private_test_numerical_data = imp_median.transform(private_test_numerical_data)
+
+    private_test_non_numerical_data = imp_most_frequent.transform(private_test_non_numerical_data)
+
+    private_testing_data = np.concatenate((private_test_non_numerical_data, private_test_numerical_data), axis=1)
 
     non_numerical_index = list(range(len(non_numerical_index)))
     numerical_index = list(range(len(non_numerical_index), len(numerical_index) + len(non_numerical_index)))
 
-    return training_data, testing_data, numerical_index, non_numerical_index, labels
+    return training_data, public_testing_data, private_testing_data, numerical_index, non_numerical_index, labels
 
 def normalize(training_data, public_testing_data, numerical_index, non_numerical_index):
-    
+    print('normalizing')
     train_numerical_data = training_data[:, numerical_index]
     train_non_numerical_data = training_data[:, non_numerical_index]
     normalized_feature = np.mean(train_numerical_data, axis=0) > 100
@@ -334,16 +325,18 @@ def normalize(training_data, public_testing_data, numerical_index, non_numerical
     testing_data = np.concatenate((test_non_numerical_data, test_numerical_data), axis=1)
     return training_data, testing_data
 
-def onehot_encoding(training_data, testing_data, one_hot_index):
+def onehot_encoding(training_data, public_testing_data, private_testing_data, one_hot_index):
+    print('onehot encoding')
     onehotencorder = ColumnTransformer(
         [('one_hot_encoder', OneHotEncoder(handle_unknown='ignore'), one_hot_index)],
         remainder='passthrough'                     
     )
     onehotencorder.fit(training_data)
     training_data = onehotencorder.transform(training_data)
-    testing_data = onehotencorder.transform(testing_data)
+    public_testing_data = onehotencorder.transform(public_testing_data)
+    private_testing_data = onehotencorder.transform(private_testing_data)
 
-    return training_data, testing_data
+    return training_data, public_testing_data, private_testing_data
 
 def save_checkpoint(checkpoint_path, model):
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)

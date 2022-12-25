@@ -219,7 +219,7 @@ def missing_imputate(df_train, df_public, df_private):
         df_private[[categorical_column]] = pd.DataFrame(imp_most_frequent.transform(df_private[[categorical_column]].copy()))
     return df_train, df_public, df_private
 
-def missing_process(df_train, df_public, df_private, remove_threshold_ratio=0.9):
+def missing_process(df_train, df_public, df_private, remove_threshold_ratio=0.99):
     print('missing processing')
     df_train, df_public, df_private = missing_remove(df_train, df_public, df_private, remove_threshold_ratio=remove_threshold_ratio)
     df_train, df_public, df_private = missing_imputate(df_train, df_public, df_private)
@@ -250,23 +250,20 @@ def label_encoding(df_train, df_public, df_private, categorical_columns):
         df_private[[categorical_column]] = pd.DataFrame(labelencoder.transform(df_private[categorical_column].copy()))
     return df_train, df_public, df_private
 
-def onehot_encoding(df_train, df_public, categorical_columns):
+def onehot_encoding(df_train, df_public, df_private, categorical_columns):
     print('One Hot encoding')
 
-    print(list(df_train.columns))
-    print(list(df_train.values[2]))
-    
-    onehot_encoder = OneHotEncoder()
-    for categorical_column in categorical_columns:
-        ohe_df = pd.DataFrame(onehot_encoder.fit_transform(df_train[[categorical_column]].copy()))
-        df_train = pd.concat([df_train, ohe_df], axis=1).drop([categorical_column], axis=1)
-        ohe_df = pd.DataFrame(onehot_encoder.transform(df_public[[categorical_column]].copy()))
-        df_public = pd.concat([df_public, ohe_df], axis=1).drop([categorical_column], axis=1)
-        print(list(df_train.columns))
-        print(list(df_train.values[2]))
-    # df_train = pd.get_dummies(df_train, columns = categorical_column)
-    # df_public = pd.get_dummies(df_public, columns = categorical_column)
-    return df_train, df_public
+    train_id = pd.RangeIndex(len(df_train))
+    public_id = pd.RangeIndex(len(df_train), len(df_train)+len(df_public))
+    private_id = pd.RangeIndex(len(df_train)+len(df_public), len(df_train)+len(df_public)+len(df_private))
+
+    df = pd.concat([df_train, df_public, df_private]).reset_index(drop=True)
+    df = pd.get_dummies(df, columns = categorical_columns)
+
+    df_train = df.loc[train_id]
+    df_public = df.loc[public_id]
+    df_private = df.loc[private_id]
+    return df_train, df_public, df_private
 
 def get_preprocessed_data(args):
     if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and os.path.exists(args.private_preprocessed_pickle)and args.load_data:
@@ -288,12 +285,14 @@ def get_preprocessed_data(args):
         df_private['sar_flag'] = df_private['label']
         df_private = df_private.drop(columns=['cust_id', 'date'])
 
+
         df_train, df_public, df_private = missing_process(df_train, df_public, df_private)
 
         numerical_columns, categorical_columns = get_column_type(df_train)
         df_train[numerical_columns], df_public[numerical_columns], df_private[numerical_columns] = normalize(df_train, df_public, df_private, numerical_columns)
 
         df_train, df_public, df_private = label_encoding(df_train, df_public, df_private, categorical_columns)
+        df_train, df_public, df_private = onehot_encoding(df_train, df_public, df_private, categorical_columns)
 
         df_train['alert_key'] = df_train['alert_key'].astype(int)
         df_public['alert_key'] = df_public['alert_key'].astype(int)
@@ -302,11 +301,16 @@ def get_preprocessed_data(args):
         write_to_pickle(args.train_preprocessed_pickle, df_train)
         write_to_pickle(args.public_preprocessed_pickle, df_public)
         write_to_pickle(args.private_preprocessed_pickle, df_private)
+
+    print('df_train:', df_train.shape)
+    print('df_public:', df_public.shape)
+    print('df_private:', df_private.shape)
+    
     return df_train, df_public, df_private
 
 def pred_to_csv(args, df_pred):
     # 考慮private alert key部分，滿足上傳條件
-
+    
     public_private_test_csv = os.path.join(args.data_dir, '預測的案件名單及提交檔案範例.csv')
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
@@ -317,6 +321,7 @@ def pred_to_csv(args, df_pred):
     df_non_exists_keys = pd.DataFrame(0, index=non_exists_keys_index, columns=df_pred.columns)
     df_non_exists_keys['alert_key'] = non_exists_keys
     df_predicted = pd.concat([df_pred, df_non_exists_keys])
+    df_predicted = df_predicted.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
     df_predicted['alert_key'] = df_predicted['alert_key'].astype(int)
     df_predicted.to_csv(args.pred_path, index=False)
     print('Output to csv:', args.pred_path)

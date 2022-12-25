@@ -21,16 +21,16 @@ def parse_args() -> Namespace:
     parser.add_argument("--origin_label", default=True, type=bool, help="use binary label without considering the dates are near or far ")
 
     # preprocess data path
-    parser.add_argument("--train_pickle", default='./preprocess_data/train_5.pickle', type=str)
-    parser.add_argument("--public_pickle", default='./preprocess_data/public_5.pickle', type=str)
-    parser.add_argument("--private_pickle", default='./preprocess_data/private_5.pickle', type=str)
-    parser.add_argument("--train_preprocessed_pickle", default='./preprocess_data/train_preprocessed_5.pickle', type=str)
-    parser.add_argument("--public_preprocessed_pickle", default='./preprocess_data/public_preprocessed_5.pickle', type=str)
-    parser.add_argument("--private_preprocessed_pickle", default='./preprocess_data/private_preprocessed_5.pickle', type=str)
+    parser.add_argument("--train_pickle", default='./preprocess_data/train_origin_label_5.pickle', type=str)
+    parser.add_argument("--public_pickle", default='./preprocess_data/public_origin_label_5.pickle', type=str)
+    parser.add_argument("--private_pickle", default='./preprocess_data/private_origin_label_5.pickle', type=str)
+    parser.add_argument("--train_preprocessed_pickle", default='./preprocess_data/train_preprocessed_origin_label_5.pickle', type=str)
+    parser.add_argument("--public_preprocessed_pickle", default='./preprocess_data/public_preprocessed_origin_label_5.pickle', type=str)
+    parser.add_argument("--private_preprocessed_pickle", default='./preprocess_data/private_preprocessed_origin_label_5.pickle', type=str)
     
     # model
-    parser.add_argument("--load_model", default=False, type=bool, help="load model and won't train if exists")
-    parser.add_argument("--load_to_train", default=False, type=bool, help="load model and continue to train if exists")
+    parser.add_argument("--load_model", default=True, type=bool, help="load model and won't train if exists")
+    parser.add_argument("--load_to_train", default=True, type=bool, help="load model and continue to train if exists")
     parser.add_argument("--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cuda")
     parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
     parser.add_argument("--seed", default=100, type=int, help="the seed (default 100)")
@@ -46,9 +46,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--test_batch", type=int, default=16384)
 
     # training
-    parser.add_argument("--epoch", type=int, default=20)
+    parser.add_argument("--epoch", type=int, default=10000)
     parser.add_argument("--save_interval", type=int, default=5)
-    parser.add_argument("--epoch_patience", type=int, default=100)
+    parser.add_argument("--epoch_patience", type=int, default=20)
 
     parser.add_argument("--matrix", type=str, default='loss')
     args = parser.parse_args()

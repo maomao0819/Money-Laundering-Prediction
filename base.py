@@ -190,14 +190,17 @@ def model_pred(
     prediction = sorted(prediction, reverse=True, key= lambda s: s[0])
     return prediction
 
-def pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key):
+def pred_to_csv(args, df_pred, df_public_private_test):
+    alert_keys = df_pred['alert_key']
+    predicted = df_pred.to_numpy().tolist()
+
     # 考慮private alert key部分，滿足上傳條件
     public_private_alert_key = df_public_private_test['alert_key'].values
     # print(len(public_private_alert_key))
 
     # For alert key not in public, add zeros
     for key in public_private_alert_key:
-        if key not in public_testing_alert_key:
+        if key not in alert_keys:
             predicted.append([key, 0])
     print(len(predicted))
     predict_alert_key, predict_probability = [], []
@@ -209,7 +212,7 @@ def pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_ke
         "alert_key": predict_alert_key,
         "probability": predict_probability
     })
-
+    df_predicted = df_predicted.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
     df_predicted.to_csv(args.pred_path, index=False)
 
 def evaluate(args):
@@ -227,6 +230,12 @@ def main(args):
     training_data, labels, public_testing_data, public_testing_alert_key, private_testing_data, private_testing_alert_key = utils_base.get_data(data_dir=args.data_dir, preprocess_data_dir=args.preprocess_data_dir)
     # print('first training data', training_data[0])
     # print(training_data.shape, public_testing_data.shape)
+    print('training_data', np.shape(training_data))
+    print('labels', np.shape(labels))
+    print('public_testing_data', np.shape(public_testing_data))
+    print('public_testing_alert_key', np.shape(public_testing_alert_key))
+    print('private_testing_data', np.shape(private_testing_data))
+    print('private_testing_alert_key', np.shape(private_testing_alert_key))
 
     """## 缺失值補漏
     可以發現有不少筆資料其實是有缺漏的，補上缺失值的方法有很多種，我們對於數值類資料補上中位數，對於類別類資料補上眾數。
@@ -239,7 +248,7 @@ def main(args):
     non_numerical_index = [0,1,3,12,13,15,16,18,19,20,21,22,23]
 
 
-    training_data, public_testing_data, numerical_index, non_numerical_index, labels = utils_base.missing_imputate(training_data, public_testing_data, numerical_index, non_numerical_index, labels)
+    training_data, public_testing_data, private_testing_data, numerical_index, non_numerical_index, labels = utils_base.missing_imputate(training_data, public_testing_data, private_testing_data, numerical_index, non_numerical_index, labels)
 
     """ normalization"""
     # training_data, public_testing_data = utils_base.normalize(training_data, public_testing_data, numerical_index, non_numerical_index)
@@ -252,10 +261,10 @@ def main(args):
     one_hot_index = non_numerical_index
     # one_hot_index = [1,5,6,7,10,11]
 
-    training_data, public_testing_data = utils_base.onehot_encoding(training_data, public_testing_data, one_hot_index)
+    training_data, public_testing_data, private_testing_data = utils_base.onehot_encoding(training_data, public_testing_data, private_testing_data, one_hot_index)
     training_data = training_data.toarray()
     public_testing_data = public_testing_data.toarray()
-
+    private_testing_data = private_testing_data.toarray()
     # """# XGBoost 訓練"""
     # # 建立 XGBClassifier 模型
     xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
@@ -311,7 +320,7 @@ def main(args):
 
     # # Predict probability
     # predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
-    # prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
+    # prob_xgbr_public = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
     # prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
@@ -324,17 +333,41 @@ def main(args):
     dnn_prob = DNN_Model_Prob(n_feature=69).to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
     predicted_DNN = model_pred(args, dnn_prob, public_testing_data, public_testing_alert_key)
-    prob_DNN = np.array(predicted_DNN)[:, 1]
+    prob_DNN_public = np.array(predicted_DNN)[:, 1]
     
-    df_pred = pd.DataFrame(predicted_DNN, columns = ['alert_key','probability'])
+    df_pred_public = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
     # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
-    df_pred['probability'] = prob_DNN
+    df_pred_public['probability'] = prob_DNN_public
     # df_pred['probability'] = prob_DNN
-    df_pred.sort_values(by=['probability'])
-    predicted = df_pred.to_numpy().tolist()
 
-    pred_to_csv(args, predicted, df_public_private_test, public_testing_alert_key)
+    pred_to_csv(args, df_pred_public, df_public_private_test)
     evaluate(args)
+
+    # predicted_xgbr = ML_model_pred(xgbrModel, private_testing_data, public_testing_alert_key)
+    prob_xgbr_private = ML_model_prob(xgbrModel, private_testing_data, public_testing_alert_key)
+
+    # prob_RFC = ML_model_prob(RFC, private_testing_data, public_testing_alert_key)
+
+    # prob_KNN = ML_model_prob(KNN, private_testing_data, public_testing_alert_key)
+
+    # prob_DT = ML_model_prob(DT, private_testing_data, public_testing_alert_key)
+
+    # prob_SVM = ML_model_prob(SVM, private_testing_data, public_testing_alert_key)
+
+    dnn_prob = DNN_Model_Prob(n_feature=69).to(args.device)
+    dnn_prob.load_state_dict(dnn.state_dict())
+    predicted_DNN = model_pred(args, dnn_prob, private_testing_data, public_testing_alert_key)
+    prob_DNN_private = np.array(predicted_DNN)[:, 1]
+
+    df_pred_private = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
+    # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
+    df_pred_private['probability'] = prob_DNN_private
+    # df_pred['probability'] = prob_DNN
+
+    df_pred = pd.concat([df_pred_public, df_pred_private])
+    df_pred.sort_values(by=['probability'])
+
+    pred_to_csv(args, df_pred, df_public_private_test)
     
 def parse_args() -> Namespace:
     parser = ArgumentParser()
@@ -358,9 +391,9 @@ def parse_args() -> Namespace:
     parser.add_argument("--test_batch", type=int, default=128)
 
     # training
-    parser.add_argument("--epoch", type=int, default=10000)
+    parser.add_argument("--epoch", type=int, default=1)
     parser.add_argument("--save_interval", type=int, default=5)
-    parser.add_argument("--epoch_patience", type=int, default=100)
+    parser.add_argument("--epoch_patience", type=int, default=50)
 
     parser.add_argument("--matrix", type=str, default='loss')
     args = parser.parse_args()
