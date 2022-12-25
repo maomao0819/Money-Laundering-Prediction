@@ -17,11 +17,11 @@ from sklearn import svm
 import xgboost as xgb
 import pickle
 import utils
-from engine import model_prob, ML_model_prob, predict
+from engine import predict_all
 
 def main(args):
     df_train, df_public, df_private = utils.get_preprocessed_data(args)
-    predict(args, df_train, df_public, df_private, pred_type='public')
+    predict_all(args, df_train, df_public, df_private)
 
 if __name__ == "__main__":
     args = parse_args()

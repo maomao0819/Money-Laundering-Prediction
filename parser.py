@@ -10,7 +10,7 @@ def parse_args() -> Namespace:
 
     # data path
     parser.add_argument("--data_dir", default='./data', type=str, help="the directory to csv files.")
-    parser.add_argument("--pred_path", default='./prediction_baseline.csv', type=str, help="the path to pred file.")
+    parser.add_argument("--pred_path", default='./prediction_baseline_private.csv', type=str, help="the path to pred file.")
     parser.add_argument("--ans_path", default='./data/24_ESun_public_y_answer.csv', type=str, help="the path to ans file.")
     parser.add_argument("--preprocess_data_dir", default='./preprocess_data', type=str, help="the directory to preprocessed pickle files.")
     
@@ -18,7 +18,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--n_day_range", default=5, type=int)
     parser.add_argument("--df_batch_size", default=128, type=int)
     parser.add_argument("--load_data", default=False, type=bool, help="load data if exists")
-    parser.add_argument("--origin_label", default=False, type=bool, help="use binary label without considering the dates are near or far ")
+    parser.add_argument("--origin_label", default=True, type=bool, help="use binary label without considering the dates are near or far ")
 
     # preprocess data path
     parser.add_argument("--train_pickle", default='./preprocess_data/train_5.pickle', type=str)
@@ -46,7 +46,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--test_batch", type=int, default=16384)
 
     # training
-    parser.add_argument("--epoch", type=int, default=10000)
+    parser.add_argument("--epoch", type=int, default=20)
     parser.add_argument("--save_interval", type=int, default=5)
     parser.add_argument("--epoch_patience", type=int, default=100)
 

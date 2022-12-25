@@ -298,7 +298,7 @@ def get_preprocessed_data(args):
         df_train['alert_key'] = df_train['alert_key'].astype(int)
         df_public['alert_key'] = df_public['alert_key'].astype(int)
         df_private['alert_key'] = df_private['alert_key'].astype(int)
-        
+
         write_to_pickle(args.train_preprocessed_pickle, df_train)
         write_to_pickle(args.public_preprocessed_pickle, df_public)
         write_to_pickle(args.private_preprocessed_pickle, df_private)
@@ -317,8 +317,9 @@ def pred_to_csv(args, df_pred):
     df_non_exists_keys = pd.DataFrame(0, index=non_exists_keys_index, columns=df_pred.columns)
     df_non_exists_keys['alert_key'] = non_exists_keys
     df_predicted = pd.concat([df_pred, df_non_exists_keys])
+    df_predicted['alert_key'] = df_predicted['alert_key'].astype(int)
     df_predicted.to_csv(args.pred_path, index=False)
-    print('Output to csv')
+    print('Output to csv:', args.pred_path)
 
 def evaluate(args):
     df_pred = pd.read_csv(args.pred_path)

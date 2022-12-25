@@ -214,9 +214,9 @@ def predict(args, df_train, df_public, df_private, pred_type='public'):
     svc = svm.SVC(C=1.0, probability=True)
     svr = svm.SVR(C=1.0, epsilon=0.2)
 
-    # df_pred_xgbr = ML_model_prob(xgbrModel, df_train, df_test, label_column='sar_flag')
+    df_pred_xgbr = ML_model_prob(xgbrModel, df_train, df_test, label_column='sar_flag')
     # df_pred_RFC = ML_model_prob(RFC, df_train, df_test, label_column='sar_flag')
-    df_pred_KNN = ML_model_prob(KNN, df_train, df_test, label_column='sar_flag')
+    # df_pred_KNN = ML_model_prob(KNN, df_train, df_test, label_column='sar_flag')
     # df_pred_DT = ML_model_prob(DT, df_train, df_test, label_column='sar_flag')
     # df_pred_SVC = ML_model_prob(svc, df_train, df_test, label_column='sar_flag')
     # df_pred_SVR = ML_model_prob(svr, df_train, df_test, label_column='label')
@@ -224,12 +224,22 @@ def predict(args, df_train, df_public, df_private, pred_type='public'):
 
     # pred_prob = 10 * df_pred_xgbr['probability'] + df_pred_RFC['probability'] + df_pred_KNN['probability'] + \
     #     df_pred_DT['probability'] + df_pred_SVC['probability'] + 2 * df_pred_SVR['probability'] + 12 * df_pred_dnn['probability']
-    pred_prob = df_pred_KNN['probability'] + 12 * df_pred_dnn['probability']
+    pred_prob = df_pred_dnn['probability'] + 2 * df_pred_xgbr['probability']
     pred_data = {'alert_key': df_pred_dnn['alert_key'],
             'probability': pred_prob
     }
     df_pred = pd.DataFrame(pred_data)
     df_pred = df_pred.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
+    df_pred['alert_key'] = df_pred['alert_key'].astype(int)
     utils.pred_to_csv(args, df_pred)
     if pred_type == 'public':
         utils.evaluate(args)
+    return df_pred
+
+def predict_all(args, df_train, df_public, df_private):
+
+    df_pred_public = predict(args, df_train, df_public, df_private, pred_type='public')
+    df_pred_private = predict(args, df_train, df_public, df_private, pred_type='private')
+    df_pred = pd.concat([df_pred_public, df_pred_private])
+    df_pred = df_pred.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
+    utils.pred_to_csv(args, df_pred)

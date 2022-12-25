@@ -42,7 +42,8 @@ def preprocess(data_dir):
     # [alert_key, date]
     train_alert_date_csv = os.path.join(data_dir, 'train_x_alert_date.csv')
     # [alert_key, cust_id, risk_rank, occupation_code, total_asset, AGE]
-    cus_info_csv = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    cus_info_public_csv = os.path.join(data_dir, 'public_train_x_custinfo_full_hashed.csv')
+    cus_info_private_csv = os.path.join(data_dir, 'private_x_custinfo_full_hashed.csv')
     # [alert_key, sar_flag]
     y_csv = os.path.join(data_dir, 'train_y_answer.csv')
 
@@ -56,7 +57,7 @@ def preprocess(data_dir):
     remit_csv = os.path.join(data_dir, 'public_train_x_remit1_full_hashed.csv')
     # [alert_key, date]
     public_x_csv = os.path.join(data_dir, 'public_x_alert_date.csv')
-
+    private_x_csv = os.path.join(data_dir, 'private_x_alert_date.csv')
     cus_csv = [ccba_csv, cdtx_csv, dp_csv, remit_csv]
     date_col = ['byymm', 'date', 'tx_date', 'trans_date']
     data_use_col = [[1,3,4,5,6,7,8,9],[2,3,4],[1,4,5,6,7,8,9,10,11],[2,3]]
@@ -64,11 +65,12 @@ def preprocess(data_dir):
     print('Reading csv...')
     # read csv
     df_y = pd.read_csv(y_csv)
-    df_cus_info = pd.read_csv(cus_info_csv)
+    df_cus_info_public = pd.read_csv(cus_info_public_csv)
+    df_cus_info_private = pd.read_csv(cus_info_private_csv)
     df_date = pd.read_csv(train_alert_date_csv)
     cus_data = [pd.read_csv(_x) for _x in cus_csv]
     df_public_x = pd.read_csv(public_x_csv)
-
+    df_private_x = pd.read_csv(private_x_csv)
     # do label encoding
     le = LabelEncoder()
     cus_data[2].debit_credit = le.fit_transform(cus_data[2].debit_credit)
@@ -84,7 +86,7 @@ def preprocess(data_dir):
         cur_data = df_y.iloc[i]
         alert_key, label = cur_data['alert_key'], cur_data['sar_flag']
 
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
+        cus_info = df_cus_info_public[df_cus_info_public['alert_key']==alert_key].iloc[0]
         cus_id = cus_info['cust_id']
         cus_features = cus_info.values[2:]
 
@@ -117,14 +119,47 @@ def preprocess(data_dir):
     print('Missing value of 4 csvs:', cnts)
 
 
-    print('Start processing testing data')
+    # print('Start processing public testing data')
+    # testing_data, testing_alert_key = [], []
+    # for i in range(df_public_x.shape[0]):
+    #     # from alert key to get customer information
+    #     cur_data = df_public_x.iloc[i]
+    #     alert_key, date = cur_data['alert_key'], cur_data['date']
+
+    #     cus_info = df_cus_info_public[df_cus_info_public['alert_key']==alert_key].iloc[0]
+    #     cus_id = cus_info['cust_id']
+    #     cus_features = cus_info.values[2:]
+
+    #     for item, df in enumerate(cus_data):
+    #         cus_additional_info = df[df['cust_id']==cus_id]
+    #         cus_additional_info = cus_additional_info[cus_additional_info[date_col[item]]<=date]
+
+    #         if cus_additional_info.empty:
+    #             len_item = len(data_use_col[item])
+    #             if item == 2:
+    #                 len_item -= 1
+    #             cus_features = np.concatenate((cus_features, [np.nan] * len_item), axis=0)
+    #         else:
+    #             cur_cus_feature = cus_additional_info.loc[cus_additional_info[date_col[item]].idxmax()]
+    #             cur_cus_feature = cur_cus_feature.values[data_use_col[item]]
+    #             # 處理 實際金額 = 匯率*金額
+    #             if item == 2:
+    #                 cur_cus_feature = np.concatenate((cur_cus_feature[:2], [cur_cus_feature[2]*cur_cus_feature[3]], cur_cus_feature[4:]), axis=0)
+    #             cus_features = np.concatenate((cus_features, cur_cus_feature), axis=0)
+
+    #     testing_data.append(cus_features)
+    #     testing_alert_key.append(alert_key)
+    #     # print(cus_features)
+    #     print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
+
+    print('Start processing private testing data')
     testing_data, testing_alert_key = [], []
-    for i in range(df_public_x.shape[0]):
+    for i in range(df_private_x.shape[0]):
         # from alert key to get customer information
-        cur_data = df_public_x.iloc[i]
+        cur_data = df_private_x.iloc[i]
         alert_key, date = cur_data['alert_key'], cur_data['date']
 
-        cus_info = df_cus_info[df_cus_info['alert_key']==alert_key].iloc[0]
+        cus_info = df_cus_info_private[df_cus_info_private['alert_key']==alert_key].iloc[0]
         cus_id = cus_info['cust_id']
         cus_features = cus_info.values[2:]
 
@@ -148,7 +183,7 @@ def preprocess(data_dir):
         testing_data.append(cus_features)
         testing_alert_key.append(alert_key)
         # print(cus_features)
-        print('\r processing data {}/{}'.format(i+1, df_public_x.shape[0]), end = '')
+        print('\r processing data {}/{}'.format(i+1, df_private_x.shape[0]), end = '')
     return np.array(training_data), labels, np.array(testing_data), testing_alert_key
 
 """# 訓練資料處理"""

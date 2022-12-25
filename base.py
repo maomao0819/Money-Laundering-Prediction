@@ -47,14 +47,6 @@ def seed_everything(args):
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
 
-# def evaluate_score(dataframe):
-#     dataframe.sort_values(by=['probability'])
-#     sar_id = np.where(dataframe['sar_flag'] == 1)[0]
-#     n_sar = len(sar_id)
-#     score = n_sar / sar_id[-1]
-#     # print(f'score: {n_sar / sar_id[-1]}\t{n_sar} / {sar_id[-1]}')
-#     return score
-
 def run_one_epoch(
     args,
     model: torch.nn.Module,
@@ -102,9 +94,6 @@ def run_one_epoch(
 
 def model_train(args, training_data, labels, testing_data, load=True):
     seed_everything(args)
-    # print(type(training_data))
-    # print(np.shape(training_data))
-    # print((training_data))
 
     trainset = label_Dataset(training_data, labels)
     testing_label = pd.read_csv(args.ans_path)['sar_flag']
@@ -117,7 +106,7 @@ def model_train(args, training_data, labels, testing_data, load=True):
         valset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, pin_memory=True
     )
 
-    model = DNN_Model().to(args.device)
+    model = DNN_Model(n_feature=69).to(args.device)
     if os.path.exists(args.load) and load:
         model = utils_base.load_checkpoint(args.load, model)
 
@@ -321,24 +310,25 @@ def main(args):
     df_public_private_test = pd.read_csv(public_private_test_csv)
 
     # # Predict probability
-    predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
-    prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
+    # predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
+    # prob_xgbr = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
-    prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
+    # prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
-    prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
+    # prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
 
-    prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
+    # prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
 
-    prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
+    # prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
 
-    dnn_prob = DNN_Model_Prob().to(args.device)
+    dnn_prob = DNN_Model_Prob(n_feature=69).to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
     predicted_DNN = model_pred(args, dnn_prob, public_testing_data, public_testing_alert_key)
     prob_DNN = np.array(predicted_DNN)[:, 1]
     
     df_pred = pd.DataFrame(predicted_DNN, columns = ['alert_key','probability'])
-    df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
+    # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
+    df_pred['probability'] = prob_DNN
     # df_pred['probability'] = prob_DNN
     df_pred.sort_values(by=['probability'])
     predicted = df_pred.to_numpy().tolist()
