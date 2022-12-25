@@ -21,12 +21,12 @@ def parse_args() -> Namespace:
     parser.add_argument("--origin_label", default=False, type=bool)
 
     # preprocess data path
-    parser.add_argument("--train_pickle", default='./preprocess_data/train_origin_label_5.pickle', type=str)
-    parser.add_argument("--public_pickle", default='./preprocess_data/public_origin_label_5.pickle', type=str)
-    parser.add_argument("--private_pickle", default='./preprocess_data/private_origin_label_5.pickle', type=str)
-    parser.add_argument("--train_preprocessed_pickle", default='./preprocess_data/train_preprocessed_origin_label_5.pickle', type=str)
-    parser.add_argument("--public_preprocessed_pickle", default='./preprocess_data/public_preprocessed_origin_label_5.pickle', type=str)
-    parser.add_argument("--private_preprocessed_pickle", default='./preprocess_data/private_preprocessed_origin_label_5.pickle', type=str)
+    parser.add_argument("--train_pickle", default='./preprocess_data/train_5.pickle', type=str)
+    parser.add_argument("--public_pickle", default='./preprocess_data/public_5.pickle', type=str)
+    parser.add_argument("--private_pickle", default='./preprocess_data/private_5.pickle', type=str)
+    parser.add_argument("--train_preprocessed_pickle", default='./preprocess_data/train_preprocessed_5.pickle', type=str)
+    parser.add_argument("--public_preprocessed_pickle", default='./preprocess_data/public_preprocessed_5.pickle', type=str)
+    parser.add_argument("--private_preprocessed_pickle", default='./preprocess_data/private_preprocessed_5.pickle', type=str)
     
     # model
     parser.add_argument("--load_model", default=False, type=bool)
