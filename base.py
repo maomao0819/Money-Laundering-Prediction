@@ -61,6 +61,7 @@ def run_one_epoch(
         model.eval()
     epoch_loss = 0.0
     epoch_correct = 0.0
+    criterion = torch.nn.BCELoss()
     n_batch = len(dataloader)
     batch_pbar = tqdm((dataloader), total=n_batch, desc="Batch")
     with torch.set_grad_enabled(mode == "train"):
@@ -72,6 +73,7 @@ def run_one_epoch(
                 optimizer.zero_grad()
             output = model(data)
             loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.05, reduction='mean')
+            # loss = criterion(output.squeeze(), label)
             if mode == "train":
                 loss.backward()
                 optimizer.step()
@@ -94,7 +96,7 @@ def run_one_epoch(
 
 def model_train(args, training_data, labels, testing_data, load=True):
     seed_everything(args)
-
+    
     trainset = label_Dataset(training_data, labels)
     testing_label = pd.read_csv(args.ans_path)['sar_flag']
     valset = label_Dataset(testing_data, testing_label)
@@ -106,7 +108,7 @@ def model_train(args, training_data, labels, testing_data, load=True):
         valset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, pin_memory=True
     )
 
-    model = DNN_Model(n_feature=69).to(args.device)
+    model = DNN_Model(n_feature=np.shape(training_data)[-1]).to(args.device)
     if os.path.exists(args.load) and load:
         model = utils_base.load_checkpoint(args.load, model)
 
@@ -187,13 +189,15 @@ def model_pred(
         key_prob = np.dstack((alert_key, prob)).squeeze(0)
         prediction.extend(key_prob)
         batch_pbar.set_description(f"Batch [{batch_idx}/{n_batch}]")
+    
     prediction = sorted(prediction, reverse=True, key= lambda s: s[0])
     return prediction
 
 def pred_to_csv(args, df_pred, df_public_private_test):
+    df_pred['alert_key'] = df_pred['alert_key'].astype(int)
+    df_pred = df_pred.groupby('alert_key').mean().reset_index()
     alert_keys = df_pred['alert_key']
     predicted = df_pred.to_numpy().tolist()
-
     # 考慮private alert key部分，滿足上傳條件
     public_private_alert_key = df_public_private_test['alert_key'].values
     # print(len(public_private_alert_key))
@@ -202,7 +206,7 @@ def pred_to_csv(args, df_pred, df_public_private_test):
     for key in public_private_alert_key:
         if key not in alert_keys:
             predicted.append([key, 0])
-    print(len(predicted))
+
     predict_alert_key, predict_probability = [], []
     for key, prob in predicted:
         predict_alert_key.append(key)
@@ -213,7 +217,11 @@ def pred_to_csv(args, df_pred, df_public_private_test):
         "probability": predict_probability
     })
     df_predicted = df_predicted.sort_values(by=['probability'], ascending=False).reset_index(drop=True)
+    df_predicted['alert_key'] = df_predicted['alert_key'].astype(int)
+    df_predicted = df_predicted.groupby('alert_key').mean().reset_index()
+    df_predicted['alert_key'] = df_predicted['alert_key'].astype(int)
     df_predicted.to_csv(args.pred_path, index=False)
+    print('output csv to', args.pred_path)
 
 def evaluate(args):
     df_pred = pd.read_csv(args.pred_path)
@@ -288,21 +296,21 @@ def main(args):
     xgbrModel = ML_model_train(xgbrModel, training_data, labels)
     # xgbrModel = grid
 
-    """# RandomForestClassifier 訓練"""
-    RFC = RandomForestClassifier(n_estimators = 100)
-    RFC = ML_model_train(RFC, training_data, labels)
+    # """# RandomForestClassifier 訓練"""
+    # RFC = RandomForestClassifier(n_estimators = 100)
+    # RFC = ML_model_train(RFC, training_data, labels)
 
-    """# KNeighborsClassifier 訓練"""
-    KNN = KNeighborsClassifier(n_neighbors=3)
-    KNN = ML_model_train(KNN, training_data, labels)
+    # """# KNeighborsClassifier 訓練"""
+    # KNN = KNeighborsClassifier(n_neighbors=3)
+    # KNN = ML_model_train(KNN, training_data, labels)
 
-    """# DecisionTreeClassifier 訓練"""
-    DT = DecisionTreeClassifier()
-    DT = ML_model_train(DT, training_data, labels)
+    # """# DecisionTreeClassifier 訓練"""
+    # DT = DecisionTreeClassifier()
+    # DT = ML_model_train(DT, training_data, labels)
     
-    """# SVM 訓練"""
-    SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
-    SVM = ML_model_train(SVM, training_data, labels)
+    # """# SVM 訓練"""
+    # SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
+    # SVM = ML_model_train(SVM, training_data, labels)
 
 
     """# Resnet 訓練"""
@@ -320,7 +328,7 @@ def main(args):
 
     # # Predict probability
     # predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
-    # prob_xgbr_public = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
+    prob_xgbr_public = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
     # prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
@@ -330,14 +338,14 @@ def main(args):
 
     # prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
 
-    dnn_prob = DNN_Model_Prob(n_feature=69).to(args.device)
+    dnn_prob = DNN_Model_Prob(n_feature=np.shape(training_data)[-1]).to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
     predicted_DNN = model_pred(args, dnn_prob, public_testing_data, public_testing_alert_key)
     prob_DNN_public = np.array(predicted_DNN)[:, 1]
     
     df_pred_public = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
     # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
-    df_pred_public['probability'] = prob_DNN_public
+    df_pred_public['probability'] = prob_DNN_public + prob_xgbr_public * 5
     # df_pred['probability'] = prob_DNN
 
     pred_to_csv(args, df_pred_public, df_public_private_test)
@@ -354,18 +362,16 @@ def main(args):
 
     # prob_SVM = ML_model_prob(SVM, private_testing_data, public_testing_alert_key)
 
-    dnn_prob = DNN_Model_Prob(n_feature=69).to(args.device)
-    dnn_prob.load_state_dict(dnn.state_dict())
-    predicted_DNN = model_pred(args, dnn_prob, private_testing_data, public_testing_alert_key)
+    predicted_DNN = model_pred(args, dnn_prob, private_testing_data, private_testing_alert_key)
     prob_DNN_private = np.array(predicted_DNN)[:, 1]
 
     df_pred_private = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
     # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
-    df_pred_private['probability'] = prob_DNN_private
+    df_pred_private['probability'] = prob_DNN_private + prob_xgbr_private * 5
     # df_pred['probability'] = prob_DNN
 
     df_pred = pd.concat([df_pred_public, df_pred_private])
-    df_pred.sort_values(by=['probability'])
+    df_pred.sort_values(by=['probability'], ascending=False)
 
     pred_to_csv(args, df_pred, df_public_private_test)
     
@@ -373,8 +379,8 @@ def parse_args() -> Namespace:
     parser = ArgumentParser()
 
     parser.add_argument("--seed", default=100, type=int, help="the seed (default 100)")
-    parser.add_argument("--save", default='./checkpoints', type=str, help="the directory to save checkpoints.")
-    parser.add_argument("--load", default='./checkpoints/best.pth', type=str, help="the directory to load the checkpoint.")
+    parser.add_argument("--save", default='./checkpoints_base', type=str, help="the directory to save checkpoints.")
+    parser.add_argument("--load", default='./checkpoints_base/best.pth', type=str, help="the directory to load the checkpoint.")
     parser.add_argument("--data_dir", default='./data', type=str, help="the directory to csv files.")
     parser.add_argument("--pred_path", default='./prediction_baseline_0.csv', type=str, help="the path to pred file.")
     parser.add_argument("--ans_path", default='./data/24_ESun_public_y_answer.csv', type=str, help="the path to ans file.")
@@ -383,17 +389,17 @@ def parse_args() -> Namespace:
     parser.add_argument("--workers", default=8, type=int, help="the number of data loading workers (default: 4)")
 
     # optimizer
-    parser.add_argument("-lr", "--learning_rate", type=float, default=5e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-7)
+    parser.add_argument("-lr", "--learning_rate", type=float, default=5e-4)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
 
     # data loader
     parser.add_argument("--train_batch", type=int, default=128)
     parser.add_argument("--test_batch", type=int, default=128)
 
     # training
-    parser.add_argument("--epoch", type=int, default=1)
+    parser.add_argument("--epoch", type=int, default=1000)
     parser.add_argument("--save_interval", type=int, default=5)
-    parser.add_argument("--epoch_patience", type=int, default=50)
+    parser.add_argument("--epoch_patience", type=int, default=20)
 
     parser.add_argument("--matrix", type=str, default='loss')
     args = parser.parse_args()
@@ -401,6 +407,5 @@ def parse_args() -> Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    print()
     # loadData()
     main(args)
