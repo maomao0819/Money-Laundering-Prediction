@@ -24,7 +24,7 @@ def main(args):
     df_train['alert_key'] = df_train['alert_key'].astype(int)
     df_public['alert_key'] = df_public['alert_key'].astype(int)
     df_private['alert_key'] = df_private['alert_key'].astype(int)
-    predict(args, df_train, df_public, df_private, pred_type='public', load=True, load_to_train=False)
+    predict(args, df_train, df_public, df_private, pred_type='public', load=False, load_to_train=False)
     # xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
     #     n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
     #     max_depth=6,               # 樹的深度
