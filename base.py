@@ -330,13 +330,13 @@ def main(args):
     # predicted_xgbr = ML_model_pred(xgbrModel, public_testing_data, public_testing_alert_key)
     prob_xgbr_public = ML_model_prob(xgbrModel, public_testing_data, public_testing_alert_key)
 
-    # prob_RFC = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
+    # prob_RFC_public = ML_model_prob(RFC, public_testing_data, public_testing_alert_key)
 
-    # prob_KNN = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
+    # prob_KNN_public = ML_model_prob(KNN, public_testing_data, public_testing_alert_key)
 
-    # prob_DT = ML_model_prob(DT, public_testing_data, public_testing_alert_key)
+    # prob_DT_public= ML_model_prob(DT, public_testing_data, public_testing_alert_key)
 
-    # prob_SVM = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
+    prob_SVM_public = ML_model_prob(SVM, public_testing_data, public_testing_alert_key)
 
     dnn_prob = DNN_Model_Prob(n_feature=np.shape(training_data)[-1]).to(args.device)
     dnn_prob.load_state_dict(dnn.state_dict())
@@ -345,29 +345,29 @@ def main(args):
     
     df_pred_public = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
     # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
-    df_pred_public['probability'] = prob_DNN_public + prob_xgbr_public * 5
+    df_pred_public['probability'] = prob_DNN_public + prob_xgbr_public * 5 + prob_SVM_public
     # df_pred['probability'] = prob_DNN
 
     pred_to_csv(args, df_pred_public, df_public_private_test)
     evaluate(args)
 
-    # predicted_xgbr = ML_model_pred(xgbrModel, private_testing_data, public_testing_alert_key)
-    prob_xgbr_private = ML_model_prob(xgbrModel, private_testing_data, public_testing_alert_key)
+    # predicted_xgbr = ML_model_pred(xgbrModel, private_testing_data, private_testing_alert_key)
+    prob_xgbr_private = ML_model_prob(xgbrModel, private_testing_data, private_testing_alert_key)
 
-    # prob_RFC = ML_model_prob(RFC, private_testing_data, public_testing_alert_key)
+    # prob_RFC_private = ML_model_prob(RFC, private_testing_data, private_testing_alert_key)
 
-    # prob_KNN = ML_model_prob(KNN, private_testing_data, public_testing_alert_key)
+    # prob_KNN_private = ML_model_prob(KNN, private_testing_data, private_testing_alert_key)
 
-    # prob_DT = ML_model_prob(DT, private_testing_data, public_testing_alert_key)
+    # prob_DT_private = ML_model_prob(DT, private_testing_data, private_testing_alert_key)
 
-    # prob_SVM = ML_model_prob(SVM, private_testing_data, public_testing_alert_key)
+    prob_SVM_private = ML_model_prob(SVM, private_testing_data, private_testing_alert_key)
 
     predicted_DNN = model_pred(args, dnn_prob, private_testing_data, private_testing_alert_key)
     prob_DNN_private = np.array(predicted_DNN)[:, 1]
 
     df_pred_private = pd.DataFrame(predicted_DNN, columns = ['alert_key', 'probability'])
     # df_pred['probability'] = prob_xgbr * 5 + prob_RFC + prob_KNN + prob_DT + prob_SVM + prob_DNN * 3
-    df_pred_private['probability'] = prob_DNN_private + prob_xgbr_private * 5
+    df_pred_private['probability'] = prob_DNN_private + prob_xgbr_private * 5 + prob_SVM_private
     # df_pred['probability'] = prob_DNN
 
     df_pred = pd.concat([df_pred_public, df_pred_private])
