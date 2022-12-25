@@ -268,8 +268,8 @@ def onehot_encoding(df_train, df_public, categorical_columns):
     # df_public = pd.get_dummies(df_public, columns = categorical_column)
     return df_train, df_public
 
-def get_preprocessed_data(args, load=True):
-    if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and os.path.exists(args.private_preprocessed_pickle)and load:
+def get_preprocessed_data(args):
+    if os.path.exists(args.train_preprocessed_pickle) and os.path.exists(args.public_preprocessed_pickle) and os.path.exists(args.private_preprocessed_pickle)and args.load_data:
         df_train = load_from_pickle(args.train_preprocessed_pickle)
         df_public = load_from_pickle(args.public_preprocessed_pickle)
         df_private = load_from_pickle(args.private_preprocessed_pickle)

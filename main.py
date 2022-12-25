@@ -20,7 +20,7 @@ import utils
 from engine import model_prob, ML_model_prob, predict
 
 def main(args):
-    df_train, df_public, df_private = utils.get_preprocessed_data(args, load=False)
+    df_train, df_public, df_private = utils.get_preprocessed_data(args)
     df_train['alert_key'] = df_train['alert_key'].astype(int)
     df_public['alert_key'] = df_public['alert_key'].astype(int)
     df_private['alert_key'] = df_private['alert_key'].astype(int)

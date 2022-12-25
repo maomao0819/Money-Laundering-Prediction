@@ -184,7 +184,7 @@ def ML_model_prob(model, df_train, df_test, label_column='sar_flag'):
     print('Predict Finish')
     return df_pred
 
-def predict(args, df_train, df_public, df_private, pred_type='public', load=False, load_to_train=False):
+def predict(args, df_train, df_public, df_private, pred_type='public'):
     if pred_type == 'public':
         df_test = df_public
     else:
@@ -220,7 +220,7 @@ def predict(args, df_train, df_public, df_private, pred_type='public', load=Fals
     # df_pred_DT = ML_model_prob(DT, df_train, df_test, label_column='sar_flag')
     # df_pred_SVC = ML_model_prob(svc, df_train, df_test, label_column='sar_flag')
     # df_pred_SVR = ML_model_prob(svr, df_train, df_test, label_column='label')
-    df_pred_dnn = model_prob(args, df_train, df_public, df_private, pred_type=pred_type, load=load, load_to_train=load_to_train)
+    df_pred_dnn = model_prob(args, df_train, df_public, df_private, pred_type=pred_type, load=args.load_model, load_to_train=args.load_to_train)
 
     # pred_prob = 10 * df_pred_xgbr['probability'] + df_pred_RFC['probability'] + df_pred_KNN['probability'] + \
     #     df_pred_DT['probability'] + df_pred_SVC['probability'] + 2 * df_pred_SVR['probability'] + 12 * df_pred_dnn['probability']
