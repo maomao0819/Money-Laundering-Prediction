@@ -21,7 +21,7 @@ from engine import model_prob, ML_model_prob, predict
 
 def main(args):
     df_train, df_public, df_private = utils.get_preprocessed_data(args)
-    predict(args, df_train, df_public, df_private, pred_type='public', load=False, load_to_train=False)
+    predict(args, df_train, df_public, df_private, pred_type='public')
 
 if __name__ == "__main__":
     args = parse_args()
