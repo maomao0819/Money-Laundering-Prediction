@@ -72,7 +72,7 @@ def run_one_epoch(
             if mode == "train":
                 optimizer.zero_grad()
             output = model(data)
-            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.05, reduction='mean')
+            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.95, reduction='mean')
             # loss = criterion(output.squeeze(), label)
             if mode == "train":
                 loss.backward()
@@ -275,16 +275,10 @@ def main(args):
     private_testing_data = private_testing_data.toarray()
     # """# XGBoost 訓練"""
     # # 建立 XGBClassifier 模型
-    xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
-                      n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
-                      max_depth=6,               # 樹的深度
-                      min_child_weight = 1,      # 葉子節點最小權重
-                      gamma=0.,                  # 懲罰項中葉子結點個數前的參數
-                      subsample=0.8,             # 隨機選擇80%樣本建立決策樹
-                    #   objective='multi:softmax', # 指定損失函數
-                      scale_pos_weight=1,        # 解決樣本個數不平衡的問題
-                      random_state=0            # 隨機數
-                      )
+    xgbrModel = xgb.XGBClassifier(
+        n_estimators=195,         # 樹的個數--1000棵樹建立xgboost
+        random_state=0            # 隨機數
+    )
 
     # # 定義參數各種組合
     # n_estimators = [x * 100 for x in range(8, 13)]
@@ -308,9 +302,9 @@ def main(args):
     # DT = DecisionTreeClassifier()
     # DT = ML_model_train(DT, training_data, labels)
     
-    # """# SVM 訓練"""
-    # SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
-    # SVM = ML_model_train(SVM, training_data, labels)
+    """# SVM 訓練"""
+    SVM = svm.SVC(kernel='poly', degree=3, C=1.0, probability=True)
+    SVM = ML_model_train(SVM, training_data, labels)
 
 
     """# Resnet 訓練"""

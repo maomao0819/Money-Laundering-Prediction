@@ -46,7 +46,7 @@ def run_one_epoch(
             if mode == "train":
                 optimizer.zero_grad()
             output = model(data)
-            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.001, reduction='mean')
+            loss = torchvision.ops.sigmoid_focal_loss(output.squeeze(), label, alpha=0.99, reduction='mean')
             if mode == "train":
                 loss.backward()
                 optimizer.step()
@@ -190,17 +190,10 @@ def predict(args, df_train, df_public, df_private, pred_type='public'):
     else:
         df_test = df_private
 
-    xgbrModel = xgb.XGBClassifier(learning_rate=0.1,
-        n_estimators=1000,         # 樹的個數--1000棵樹建立xgboost
-        max_depth=6,               # 樹的深度
-        min_child_weight = 1,      # 葉子節點最小權重
-        gamma=0.,                  # 懲罰項中葉子結點個數前的參數
-        subsample=0.8,             # 隨機選擇80%樣本建立決策樹
-    #   objective='multi:softmax', # 指定損失函數
-        scale_pos_weight=1,        # 解決樣本個數不平衡的問題
+    xgbrModel = xgb.XGBClassifier(
+        n_estimators=195,         # 樹的個數--1000棵樹建立xgboost
         random_state=0            # 隨機數
     )
-
     """# RandomForestClassifier 訓練"""
     RFC = RandomForestClassifier(n_estimators = 100)
 
@@ -218,13 +211,13 @@ def predict(args, df_train, df_public, df_private, pred_type='public'):
     # df_pred_RFC = ML_model_prob(RFC, df_train, df_test, label_column='sar_flag')
     # df_pred_KNN = ML_model_prob(KNN, df_train, df_test, label_column='sar_flag')
     # df_pred_DT = ML_model_prob(DT, df_train, df_test, label_column='sar_flag')
-    # df_pred_SVC = ML_model_prob(svc, df_train, df_test, label_column='sar_flag')
-    # df_pred_SVR = ML_model_prob(svr, df_train, df_test, label_column='label')
+    df_pred_SVC = ML_model_prob(svc, df_train, df_test, label_column='sar_flag')
+    df_pred_SVR = ML_model_prob(svr, df_train, df_test, label_column='label')
     df_pred_dnn = model_prob(args, df_train, df_public, df_private, pred_type=pred_type, load=args.load_model, load_to_train=args.load_to_train)
 
     # pred_prob = 10 * df_pred_xgbr['probability'] + df_pred_RFC['probability'] + df_pred_KNN['probability'] + \
     #     df_pred_DT['probability'] + df_pred_SVC['probability'] + 2 * df_pred_SVR['probability'] + 12 * df_pred_dnn['probability']
-    pred_prob = df_pred_xgbr['probability'] * 5 + df_pred_dnn['probability']
+    pred_prob = df_pred_xgbr['probability'] * 7 + df_pred_dnn['probability'] + df_pred_SVC['probability'] + df_pred_SVR['probability']
     pred_data = {'alert_key': df_pred_dnn['alert_key'],
             'probability': pred_prob
     }
